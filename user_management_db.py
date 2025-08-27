@@ -3,7 +3,6 @@ from config_firebase import get_db, get_auth, get_admin_auth
 from datetime import datetime
 import pytz
 import bcrypt
-from bson import ObjectId
 
 # Obtém a instância do banco de dados e autenticação
 db = get_db()
