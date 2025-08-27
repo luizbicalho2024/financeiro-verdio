@@ -61,7 +61,9 @@ def sign_in(email, password):
             return False, "Erro: dados do usuário não encontrados."
     except Exception as e:
         log_action("ERROR", "Falha no login", {"email": email, "error": str(e)})
-        return False, "E-mail ou senha inválidos."
+        # --- MUDANÇA IMPORTANTE AQUI ---
+        # A linha abaixo vai mostrar o erro real do Firebase.
+        return False, f"Erro detalhado do Firebase: {e}"
 
 def create_user(email, password, name, role):
     """
