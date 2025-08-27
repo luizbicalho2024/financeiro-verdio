@@ -1,0 +1,7 @@
+streamlit
+firebase-admin
+pyrebase4
+pandas
+openpyxl
+fpdf
+bcrypt
