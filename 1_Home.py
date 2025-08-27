@@ -1,81 +1,141 @@
-# 1_Home.py
-
+# app.py
 import streamlit as st
-import user_management_db as umdb
-import streamlit_authenticator as stauth
+import pyrebase
+import json
+import os
 
-# --- 1. CONFIGURAÇÃO DA PÁGINA ---
-st.set_page_config(
-    page_title="Sistema Financeiro",
-    page_icon="💰",
-    layout="centered"
-)
+# --- CONFIGURAÇÃO DO FIREBASE ---
+# As credenciais foram extraídas do seu texto e convertidas para um dicionário Python.
 
-# --- 2. CONFIGURAÇÃO DO AUTENTICADOR E DIAGNÓSTICO ---
-st.info("1. Aplicação iniciada. Tentando conectar ao banco de dados...")
+firebase_config = {
+    "apiKey": "AIzaSyDmdjlRRFkxnVUjQxZ-vrvYdIRA834GLhw",
+    "authDomain": "financeiro-verdio.firebaseapp.com",
+    "projectId": "financeiro-verdio",
+    "storageBucket": "financeiro-verdio.appspot.com", # Corrigido: removido 'firebasestorage'
+    "messagingSenderId": "1025401913741",
+    "appId": "1:1025401913741:web:1f0ddc584a51b3b1acfdc4",
+    "measurementId": "G-4DM3428F0E",
+    "databaseURL": "https://financeiro-verdio-default-rtdb.firebaseio.com/"
+}
 
-# Busca todos os usuários do Firestore no formato que a biblioteca precisa
-credentials = umdb.fetch_all_users_for_auth()
+# --- INICIALIZAÇÃO DO FIREBASE ---
+# Inicializa a conexão com o Firebase para autenticação e outros serviços.
+try:
+    firebase = pyrebase.initialize_app(firebase_config)
+    auth = firebase.auth()
+    st.session_state.firebase_initialized = True
+except Exception as e:
+    st.error(f"Erro ao inicializar o Firebase: {e}")
+    st.session_state.firebase_initialized = False
 
-st.info("2. Conexão com o banco de dados e busca de usuários concluída com sucesso!")
+# --- FUNÇÕES DE AUTENTICAÇÃO ---
 
-authenticator = stauth.Authenticate(
-    credentials,
-    st.secrets["auth"]["cookie_name"],
-    st.secrets["auth"]["cookie_key"],
-    cookie_expiry_days=st.secrets["auth"]["cookie_expiry_days"],
-)
-
-# --- 3. LÓGICA DE EXIBIÇÃO ---
-
-# A. Se não houver nenhum usuário no banco de dados, mostra a tela para criar o primeiro admin
-if not credentials['usernames']:
-    st.image("imgs/logo.png", width=200)
-    st.title("🚀 Bem-vindo ao Sistema Financeiro!")
-    st.subheader("Configuração Inicial: Crie sua Conta de Administrador")
-    
-    with st.form("form_create_first_admin"):
-        name = st.text_input("Nome Completo")
-        email = st.text_input("Seu Email")
-        username = st.text_input("Nome de Usuário (para login)")
-        password = st.text_input("Senha", type="password")
-        
-        if st.form_submit_button("✨ Criar Administrador"):
-            if all([name, email, username, password]):
-                if umdb.add_user(username, name, email, password, "admin"):
-                    umdb.log_action("INFO", "Primeiro administrador criado", {"username": username})
-                    st.success("Conta de Administrador criada com sucesso!")
-                    st.info("A página será recarregada para que você possa fazer o login.")
-                    st.rerun()
-                else:
-                    st.error("Ocorreu um erro ao criar a conta. Verifique os logs.")
+def login_user(email, password):
+    """
+    Função para autenticar um usuário com email e senha.
+    Retorna o objeto do usuário em caso de sucesso ou None em caso de falha.
+    """
+    try:
+        user = auth.sign_in_with_email_and_password(email, password)
+        return user
+    except Exception as e:
+        # Tenta extrair a mensagem de erro específica do Firebase
+        try:
+            error_json = e.args[1]
+            error_message = json.loads(error_json)['error']['message']
+            if error_message == "EMAIL_NOT_FOUND":
+                st.error("Email não encontrado. Por favor, cadastre-se.")
+            elif error_message == "INVALID_PASSWORD":
+                st.error("Senha incorreta. Tente novamente.")
             else:
-                st.warning("Por favor, preencha todos os campos.")
+                st.error(f"Erro ao fazer login: {error_message}")
+        except (json.JSONDecodeError, KeyError, IndexError):
+            st.error(f"Ocorreu um erro inesperado durante o login.")
+        return None
+
+def signup_user(email, password):
+    """
+    Função para registrar um novo usuário com email e senha.
+    Retorna o objeto do usuário em caso de sucesso ou None em caso de falha.
+    """
+    try:
+        user = auth.create_user_with_email_and_password(email, password)
+        st.success("Conta criada com sucesso! Por favor, faça o login.")
+        return user
+    except Exception as e:
+        # Tenta extrair a mensagem de erro específica do Firebase
+        try:
+            error_json = e.args[1]
+            error_message = json.loads(error_json)['error']['message']
+            if error_message == "EMAIL_EXISTS":
+                st.error("Este email já está cadastrado. Tente fazer login.")
+            elif "WEAK_PASSWORD" in error_message:
+                st.error("A senha é muito fraca. Use pelo menos 6 caracteres.")
+            else:
+                st.error(f"Erro ao criar conta: {error_message}")
+        except (json.JSONDecodeError, KeyError, IndexError):
+            st.error(f"Ocorreu um erro inesperado durante o cadastro.")
+        return None
+
+# --- INTERFACE DA APLICAÇÃO ---
+
+# Título da aplicação
+st.set_page_config(page_title="Sistema de Login", layout="centered")
+st.title("Sistema com Autenticação Firebase")
+
+# Verifica se o Firebase foi inicializado corretamente
+if not st.session_state.get('firebase_initialized', False):
     st.stop()
 
-# B. Processo de Login
-authenticator.login(location='main')
+# --- LÓGICA DE EXIBIÇÃO ---
 
-if st.session_state["authentication_status"]:
-    # --- PÁGINA DE BOAS-VINDAS PÓS-LOGIN ---
-    st.sidebar.image("imgs/v-c.png", width=120)
-    st.sidebar.title(f"Olá, {st.session_state['name']}! 👋")
-    
-    st.session_state['role'] = credentials['usernames'][st.session_state['username']]['role']
-    st.session_state['email'] = credentials['usernames'][st.session_state['username']]['email']
-    
-    st.sidebar.info(f"**Nível de Acesso:** {st.session_state.get('role', 'N/A').capitalize()}")
-    authenticator.logout('Logout', 'sidebar')
-    st.sidebar.markdown("---")
+# Se o usuário não estiver logado, mostra as opções de Login/Cadastro
+if 'user' not in st.session_state:
+    choice = st.sidebar.selectbox("Login/Cadastro", ["Login", "Cadastre-se"])
 
-    st.title("Bem-vindo ao Sistema Financeiro! 🚀")
-    st.markdown("---")
-    st.header("Apresentação do Sistema")
-    st.write("Navegue entre as funcionalidades no menu lateral.")
+    if choice == "Login":
+        st.header("Faça seu Login")
+        with st.form("login_form"):
+            email = st.text_input("Email")
+            password = st.text_input("Senha", type="password")
+            login_button = st.form_submit_button("Login")
 
-elif st.session_state["authentication_status"] is False:
-    st.error('Usuário ou senha incorreto(s).')
-elif st.session_state["authentication_status"] is None:
-    st.image("imgs/logo.png", width=200)
-    st.title("Login no Sistema Financeiro")
-    st.info('Por favor, insira seu nome de usuário e senha para acessar.')
+            if login_button:
+                if email and password:
+                    user = login_user(email, password)
+                    if user:
+                        st.session_state.user = user  # Armazena o objeto do usuário na sessão
+                        st.rerun() # Recarrega a página para mostrar o conteúdo logado
+                else:
+                    st.warning("Por favor, preencha todos os campos.")
+
+    elif choice == "Cadastre-se":
+        st.header("Crie sua Conta")
+        with st.form("signup_form"):
+            new_email = st.text_input("Email")
+            new_password = st.text_input("Senha", type="password")
+            signup_button = st.form_submit_button("Cadastrar")
+
+            if signup_button:
+                if new_email and new_password:
+                    signup_user(new_email, new_password)
+                else:
+                    st.warning("Por favor, preencha todos os campos.")
+
+# Se o usuário estiver logado, mostra a página principal
+else:
+    user_info = st.session_state.user
+    # O email do usuário pode estar em diferentes locais dependendo da resposta do Firebase
+    user_email = user_info.get('email', 'Email não disponível')
+
+    st.sidebar.header(f"Bem-vindo(a)!")
+    st.sidebar.write(f"{user_email}")
+
+    st.header("Página Principal")
+    st.write("Você está logado no sistema!")
+    st.write("Aqui você pode adicionar o conteúdo principal da sua aplicação.")
+
+    # Botão de Logout
+    if st.sidebar.button("Logout"):
+        del st.session_state.user # Remove as informações do usuário da sessão
+        st.rerun() # Recarrega a página para voltar à tela de login
