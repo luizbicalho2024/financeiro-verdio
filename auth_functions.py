@@ -4,6 +4,7 @@ import pyrebase
 import json
 import firebase_admin
 from firebase_admin import credentials, db as admin_db
+from requests.exceptions import HTTPError
 
 # --- CONFIGURAÇÃO E INICIALIZAÇÃO DO FIREBASE ---
 @st.cache_resource
@@ -18,13 +19,9 @@ def initialize_firebase():
     firebase_config = dict(st.secrets.firebase_config)
     firebase_credentials = dict(st.secrets.firebase_credentials)
 
-    # --- CORREÇÃO IMPORTANTE ---
-    # Garante que os caracteres de nova linha na chave privada sejam interpretados corretamente.
-    # O Streamlit Secrets pode escapar as quebras de linha ('\n') como texto ('\\n').
     if 'private_key' in firebase_credentials:
         firebase_credentials['private_key'] = firebase_credentials['private_key'].replace('\\n', '\n')
 
-    # Inicialização do SDK Admin
     if not firebase_admin._apps:
         try:
             cred = credentials.Certificate(firebase_credentials)
@@ -32,24 +29,23 @@ def initialize_firebase():
                 'databaseURL': firebase_config['databaseURL']
             })
         except Exception as e:
-            st.error(f"Erro ao inicializar o SDK Admin: {e}")
+            st.error(f"Erro CRÍTICO ao inicializar o SDK Admin: {e}")
             return None, None
 
-    # Inicialização do Pyrebase
     try:
         firebase_client = pyrebase.initialize_app(firebase_config)
         auth_client = firebase_client.auth()
         db_admin_ref = admin_db.reference()
         return auth_client, db_admin_ref
     except Exception as e:
-        st.error(f"Erro ao inicializar o Pyrebase: {e}")
+        st.error(f"Erro CRÍTICO ao inicializar o Pyrebase: {e}")
         return None, None
 
 # --- FUNÇÕES DE AUTENTICAÇÃO E PERFIL ---
 
 def login_user(auth, db, email, password):
     """
-    Autentica o usuário com Pyrebase e busca seu perfil com o SDK Admin.
+    Autentica o usuário e busca seu perfil. Agora com tratamento de erro detalhado.
     """
     try:
         user = auth.sign_in_with_email_and_password(email, password)
@@ -66,27 +62,33 @@ def login_user(auth, db, email, password):
             st.error("Perfil de usuário não encontrado. Contate o administrador.")
             return None
             
-    except Exception as e:
-        # --- MELHORIA NO TRATAMENTO DE ERRO ---
-        # Tenta decodificar a resposta de erro do Firebase para dar feedback específico.
+    except HTTPError as e:
+        # Este é o bloco mais importante. Erros de autenticação vêm como HTTPError.
         try:
-            error_data = json.loads(e.args[1])
-            error_message = error_data['error']['message']
+            # Tenta extrair a mensagem de erro específica do Firebase
+            error_data = e.response.json()
+            error_message = error_data.get("error", {}).get("message", "ERRO_DESCONHECIDO")
+
             if "INVALID_LOGIN_CREDENTIALS" in error_message:
                 st.error("Credenciais inválidas. Verifique seu email e senha.")
+            # Este erro indica um problema com a chave de API (restrições, etc.)
+            elif "API_KEY_NOT_VALID" in error_message or "IP_ADDRESS_NOT_ALLOWED" in error_message:
+                st.error("Erro de configuração do Firebase: A chave de API não é válida ou está restrita. Verifique o Passo 2.")
+                st.code(f"Detalhe do erro: {error_message}")
             else:
-                st.error(f"Erro do Firebase: {error_message}")
-        except (json.JSONDecodeError, KeyError, IndexError, TypeError):
-            # Fallback para erros inesperados ou problemas de conexão.
-            st.error("Ocorreu um erro ao tentar fazer login. Verifique a conexão ou as credenciais.")
+                st.error(f"Ocorreu um erro de autenticação: {error_message}")
+        except json.JSONDecodeError:
+            st.error(f"Ocorreu um erro de conexão com o Firebase. Verifique sua conexão e as configurações da chave de API.")
+        return None
+    except Exception as e:
+        # Captura qualquer outro erro inesperado
+        st.error(f"Ocorreu um erro inesperado: {e}")
         return None
 
-# --- FUNÇÕES DO PAINEL DE ADMIN ---
+
+# --- As outras funções (create_user, get_all_users, update_user_profile) permanecem as mesmas ---
 
 def create_user(auth, db, email, password, role):
-    """
-    Cria um novo usuário na Authentication e define seu perfil no Realtime Database.
-    """
     try:
         new_user = auth.create_user_with_email_and_password(email, password)
         uid = new_user['localId']
@@ -108,9 +110,6 @@ def create_user(auth, db, email, password, role):
         return False
 
 def get_all_users(db):
-    """
-    Retorna todos os perfis de usuário do Realtime Database usando o SDK Admin.
-    """
     try:
         users = db.child("users").get()
         return users if users else {}
@@ -119,9 +118,6 @@ def get_all_users(db):
         return {}
 
 def update_user_profile(db, uid, new_role, new_status):
-    """
-    Atualiza o perfil (role, status) de um usuário usando o SDK Admin.
-    """
     try:
         db.child("users").child(uid).update({"role": new_role, "status": new_status})
         st.success("Perfil do usuário atualizado com sucesso!")
