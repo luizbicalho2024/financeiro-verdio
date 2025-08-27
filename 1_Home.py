@@ -2,14 +2,17 @@ import streamlit as st
 import firebase_admin
 from firebase_admin import credentials, auth, firestore
 import pandas as pd
+import ast  # <-- CORREÇÃO: Biblioteca importada para converter a string de credenciais
 
 # --- Configuração do Firebase (Executado apenas uma vez) ---
 def initialize_firebase():
     """Inicializa a conexão com o Firebase usando as credenciais do Streamlit secrets."""
     if not firebase_admin._apps:
         try:
-            # Obtém as credenciais do secrets.toml
-            creds_dict = st.secrets["firebase_credentials"]
+            # CORREÇÃO: Converte a credencial de string para dicionário de forma segura
+            creds_str = st.secrets["firebase_credentials"]
+            creds_dict = ast.literal_eval(creds_str)
+            
             creds = credentials.Certificate(creds_dict)
             firebase_admin.initialize_app(creds)
         except Exception as e:
@@ -49,11 +52,10 @@ def login_page():
                 # Tenta autenticar o usuário com o Firebase Auth
                 user = auth.get_user_by_email(email)
                 
-                # ATENÇÃO: Esta é uma verificação de senha simplificada e NÃO SEGURA para fins de demonstração.
-                # A autenticação real deve ser feita no lado do cliente com a SDK do Firebase ou
-                # usando APIs de verificação de identidade. Como o `firebase-admin` não tem um método
-                # direto para verificar a senha, simulamos um login bem-sucedido se o usuário existir.
-                # Para uma aplicação real, use st-firebase-auth ou uma biblioteca similar.
+                # ATENÇÃO: A verificação de senha no backend com firebase-admin não é direta.
+                # Esta implementação assume que se o usuário existe, o login é bem-sucedido.
+                # Para um sistema em produção, use uma biblioteca de autenticação no frontend
+                # como 'st-firebase-auth' para uma validação de senha segura.
                 
                 st.session_state['logged_in'] = True
                 st.session_state['user_uid'] = user.uid
@@ -65,7 +67,6 @@ def login_page():
             except auth.UserNotFoundError:
                 st.error("Usuário não encontrado. Verifique o e-mail.")
             except Exception as e:
-                # Captura outras exceções genéricas de autenticação
                 st.error(f"Erro de autenticação: E-mail ou senha inválidos.")
 
 
@@ -108,6 +109,7 @@ def user_management_page():
     try:
         users_ref = auth.list_users()
         all_users = []
+        # O método list_users() retorna um iterador, então precisamos iterar sobre ele.
         for user in users_ref.iterate_all():
             user_data = {
                 "uid": user.uid,
@@ -120,15 +122,14 @@ def user_management_page():
         if not all_users:
             st.info("Nenhum usuário cadastrado encontrado.")
         else:
-            df_users = pd.DataFrame(all_users)
+            df_users_original = pd.DataFrame(all_users)
             
-            # Use st.data_editor para permitir edições
             st.info("Clique duas vezes em uma célula para editar o nível de acesso (role) ou o status (disabled).")
             edited_df = st.data_editor(
-                df_users,
+                df_users_original,
                 column_config={
-                    "uid": st.column_config.Column(disabled=True), # UID não pode ser editado
-                    "email": st.column_config.Column(disabled=True), # Email não pode ser editado por aqui
+                    "uid": st.column_config.Column("UID (não editável)", disabled=True),
+                    "email": st.column_config.Column("Email (não editável)", disabled=True),
                     "disabled": st.column_config.CheckboxColumn("Desabilitado?"),
                     "role": st.column_config.SelectboxColumn(
                         "Nível de Acesso",
@@ -137,41 +138,35 @@ def user_management_page():
                     )
                 },
                 hide_index=True,
-                num_rows="dynamic", # Evita que o editor adicione novas linhas
+                num_rows="dynamic",
                 key="user_editor"
             )
 
             # Detectar e aplicar mudanças
-            if not edited_df.equals(df_users):
-                st.warning("Alterações detectadas. Clique no botão abaixo para salvar.")
-                if st.button("Salvar Alterações"):
-                    changes = df_users.compare(edited_df)
-                    for index, row in changes.iterrows():
-                        uid_to_update = df_users.loc[index, "uid"]
-                        updates = {}
-                        
-                        # Checa mudança no status 'disabled'
-                        if pd.notna(row[('disabled', 'self')]):
-                            updates['disabled'] = edited_df.loc[index, 'disabled']
-                        
-                        # Checa mudança na 'role'
-                        if pd.notna(row[('role', 'self')]):
-                            updates['role'] = edited_df.loc[index, 'role']
-                        
-                        try:
-                            # Atualiza no Firebase Auth (apenas 'disabled')
-                            if 'disabled' in updates:
-                                auth.update_user(uid_to_update, disabled=updates['disabled'])
-                            
-                            # Atualiza no Firestore (apenas 'role')
-                            if 'role' in updates:
-                                db.collection('users').document(uid_to_update).update({'role': updates['role']})
-
-                            st.success(f"Usuário com UID {uid_to_update} atualizado!")
-                        except Exception as e:
-                            st.error(f"Erro ao atualizar UID {uid_to_update}: {e}")
+            if st.button("Salvar Alterações"):
+                for i in range(len(edited_df)):
+                    original_row = df_users_original.iloc[i]
+                    edited_row = edited_df.iloc[i]
+                    uid_to_update = original_row["uid"]
                     
-                    st.rerun()
+                    # Checa se houve mudança no status 'disabled'
+                    if original_row['disabled'] != edited_row['disabled']:
+                        try:
+                            auth.update_user(uid_to_update, disabled=edited_row['disabled'])
+                            st.success(f"Status do usuário {original_row['email']} atualizado.")
+                        except Exception as e:
+                            st.error(f"Erro ao atualizar status de {original_row['email']}: {e}")
+                    
+                    # Checa se houve mudança na 'role'
+                    if original_row['role'] != edited_row['role']:
+                        try:
+                            db.collection('users').document(uid_to_update).update({'role': edited_row['role']})
+                            st.success(f"Nível de acesso de {original_row['email']} atualizado.")
+                        except Exception as e:
+                             st.error(f"Erro ao atualizar nível de acesso de {original_row['email']}: {e}")
+                
+                st.toast("Alterações salvas! A página será atualizada.")
+                st.rerun()
 
     except Exception as e:
         st.error(f"Erro ao carregar usuários: {e}")
@@ -196,13 +191,17 @@ def main():
         st.sidebar.write(f"**Nível:** {st.session_state.get('user_role', '')}")
 
         if st.sidebar.button("Logout"):
-            st.session_state['logged_in'] = False
+            st.session_state.clear() # Limpa todo o estado da sessão
             st.rerun()
 
         st.sidebar.divider()
 
         # --- Menu de Navegação ---
-        page = st.sidebar.radio("Navegação", ["Página Inicial", "Gerenciar Usuários"])
+        page_options = ["Página Inicial"]
+        if st.session_state.get('user_role') == 'Admin':
+            page_options.append("Gerenciar Usuários")
+        
+        page = st.sidebar.radio("Navegação", page_options)
 
         if page == "Página Inicial":
             st.title("Página Inicial")
@@ -210,12 +209,7 @@ def main():
             # Adicione aqui o conteúdo que todos os usuários podem ver
         
         elif page == "Gerenciar Usuários":
-            # Verifica se o usuário é Admin para mostrar a página
-            if st.session_state.get('user_role') == 'Admin':
-                user_management_page()
-            else:
-                st.error("Acesso Negado. Você não tem permissão para acessar esta página.")
-
+            user_management_page()
 
 if __name__ == "__main__":
     main()
