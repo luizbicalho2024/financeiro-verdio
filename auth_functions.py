@@ -2,43 +2,57 @@
 import streamlit as st
 import pyrebase
 import json
+import firebase_admin
+from firebase_admin import credentials, db as admin_db
 
 # --- CONFIGURAÇÃO E INICIALIZAÇÃO DO FIREBASE ---
 @st.cache_resource
 def initialize_firebase():
     """
-    Inicializa a conexão com o Firebase e retorna os objetos de autenticação e banco de dados.
-    Usa @st.cache_resource para evitar reinicializações a cada interação na página.
+    Inicializa a conexão com o Firebase usando as credenciais de st.secrets.
     """
-    firebase_config = {
-        "apiKey": "AIzaSyDmdjlRRFkxnVUjQxZ-vrvYdIRA834GLhw",
-        "authDomain": "financeiro-verdio.firebaseapp.com",
-        "projectId": "financeiro-verdio",
-        "storageBucket": "financeiro-verdio.appspot.com",
-        "messagingSenderId": "1025401913741",
-        "appId": "1:1025401913741:web:1f0ddc584a51b3b1acfdc4",
-        "measurementId": "G-4DM3428F0E",
-        "databaseURL": "https://financeiro-verdio-default-rtdb.firebaseio.com/"
-    }
+    # Verifica se os segredos necessários estão presentes
+    if "firebase_config" not in st.secrets or "firebase_credentials" not in st.secrets:
+        st.error("Configuração do Firebase não encontrada nos segredos. Adicione-a em .streamlit/secrets.toml.")
+        return None, None
+
+    # Carrega a configuração do Pyrebase a partir dos segredos
+    firebase_config = dict(st.secrets.firebase_config)
+    
+    # Carrega as credenciais do SDK Admin a partir dos segredos
+    firebase_credentials = dict(st.secrets.firebase_credentials)
+
+    # Inicialização do SDK Admin
+    if not firebase_admin._apps:
+        try:
+            cred = credentials.Certificate(firebase_credentials)
+            firebase_admin.initialize_app(cred, {
+                'databaseURL': firebase_config['databaseURL']
+            })
+        except Exception as e:
+            st.error(f"Erro ao inicializar o SDK Admin: {e}")
+            return None, None
+
+    # Inicialização do Pyrebase
     try:
-        firebase = pyrebase.initialize_app(firebase_config)
-        auth = firebase.auth()
-        db = firebase.database()
-        return auth, db
+        firebase_client = pyrebase.initialize_app(firebase_config)
+        auth_client = firebase_client.auth()
+        db_admin_ref = admin_db.reference()
+        return auth_client, db_admin_ref
     except Exception as e:
-        st.error(f"Erro ao inicializar o Firebase: {e}")
+        st.error(f"Erro ao inicializar o Pyrebase: {e}")
         return None, None
 
 # --- FUNÇÕES DE AUTENTICAÇÃO E PERFIL ---
 
 def login_user(auth, db, email, password):
     """
-    Autentica o usuário e busca seu perfil (role, status) no Realtime Database.
+    Autentica o usuário com Pyrebase e busca seu perfil com o SDK Admin.
     """
     try:
         user = auth.sign_in_with_email_and_password(email, password)
         uid = user['localId']
-        user_profile = db.child("users").child(uid).get().val()
+        user_profile = db.child("users").child(uid).get()
 
         if user_profile:
             if user_profile.get('status') == 'disabled':
@@ -50,28 +64,8 @@ def login_user(auth, db, email, password):
             st.error("Perfil de usuário não encontrado. Contate o administrador.")
             return None
             
-    # --- BLOCO DE ERRO CORRIGIDO ---
     except Exception as e:
-        # O erro do Pyrebase pode ter formatos diferentes. Esta lógica tenta extrair a melhor mensagem.
-        try:
-            # Tenta decodificar a resposta JSON esperada
-            error_data = json.loads(e.args[1])
-            error_message = error_data['error']['message']
-
-            # Mapeia as mensagens de erro comuns para textos mais amigáveis
-            if "INVALID_LOGIN_CREDENTIALS" in error_message:
-                st.error("Credenciais inválidas. Verifique seu email e senha.")
-            elif "EMAIL_NOT_FOUND" in error_message:
-                st.error("Email não encontrado.")
-            elif "INVALID_PASSWORD" in error_message:
-                st.error("Senha incorreta.")
-            else:
-                st.error(f"Erro do Firebase: {error_message}")
-
-        except (json.JSONDecodeError, KeyError, IndexError, TypeError):
-            # Se a decodificação falhar, mostra uma mensagem mais genérica
-            st.error("Credenciais inválidas ou ocorreu um erro de conexão. Tente novamente.")
-        
+        st.error("Credenciais inválidas. Verifique seu email e senha e tente novamente.")
         return None
 
 # --- FUNÇÕES DO PAINEL DE ADMIN ---
@@ -89,24 +83,23 @@ def create_user(auth, db, email, password, role):
         return True
     except Exception as e:
         try:
-            error_json = e.args[1]
-            error_message = json.loads(error_json)['error']['message']
+            error_message = json.loads(e.args[1])['error']['message']
             if error_message == "EMAIL_EXISTS":
                 st.error("Este email já está cadastrado.")
             elif "WEAK_PASSWORD" in error_message:
                 st.error("A senha é muito fraca. Use pelo menos 6 caracteres.")
             else:
                 st.error(f"Erro ao criar conta: {error_message}")
-        except (json.JSONDecodeError, KeyError, IndexError):
+        except:
             st.error(f"Ocorreu um erro inesperado durante a criação do usuário.")
         return False
 
 def get_all_users(db):
     """
-    Retorna todos os perfis de usuário do Realtime Database.
+    Retorna todos os perfis de usuário do Realtime Database usando o SDK Admin.
     """
     try:
-        users = db.child("users").get().val()
+        users = db.child("users").get()
         return users if users else {}
     except Exception as e:
         st.error(f"Erro ao buscar usuários: {e}")
@@ -114,7 +107,7 @@ def get_all_users(db):
 
 def update_user_profile(db, uid, new_role, new_status):
     """
-    Atualiza o perfil (role, status) de um usuário.
+    Atualiza o perfil (role, status) de um usuário usando o SDK Admin.
     """
     try:
         db.child("users").child(uid).update({"role": new_role, "status": new_status})
