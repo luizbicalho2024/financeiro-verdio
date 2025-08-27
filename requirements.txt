@@ -6,3 +6,4 @@ openpyxl
 fpdf
 bcrypt
 setuptools
+streamlit-authenticator
