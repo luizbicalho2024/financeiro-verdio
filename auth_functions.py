@@ -11,16 +11,18 @@ def initialize_firebase():
     """
     Inicializa a conexão com o Firebase usando as credenciais de st.secrets.
     """
-    # Verifica se os segredos necessários estão presentes
     if "firebase_config" not in st.secrets or "firebase_credentials" not in st.secrets:
         st.error("Configuração do Firebase não encontrada nos segredos. Adicione-a em .streamlit/secrets.toml.")
         return None, None
 
-    # Carrega a configuração do Pyrebase a partir dos segredos
     firebase_config = dict(st.secrets.firebase_config)
-    
-    # Carrega as credenciais do SDK Admin a partir dos segredos
     firebase_credentials = dict(st.secrets.firebase_credentials)
+
+    # --- CORREÇÃO IMPORTANTE ---
+    # Garante que os caracteres de nova linha na chave privada sejam interpretados corretamente.
+    # O Streamlit Secrets pode escapar as quebras de linha ('\n') como texto ('\\n').
+    if 'private_key' in firebase_credentials:
+        firebase_credentials['private_key'] = firebase_credentials['private_key'].replace('\\n', '\n')
 
     # Inicialização do SDK Admin
     if not firebase_admin._apps:
@@ -65,7 +67,18 @@ def login_user(auth, db, email, password):
             return None
             
     except Exception as e:
-        st.error("Credenciais inválidas. Verifique seu email e senha e tente novamente.")
+        # --- MELHORIA NO TRATAMENTO DE ERRO ---
+        # Tenta decodificar a resposta de erro do Firebase para dar feedback específico.
+        try:
+            error_data = json.loads(e.args[1])
+            error_message = error_data['error']['message']
+            if "INVALID_LOGIN_CREDENTIALS" in error_message:
+                st.error("Credenciais inválidas. Verifique seu email e senha.")
+            else:
+                st.error(f"Erro do Firebase: {error_message}")
+        except (json.JSONDecodeError, KeyError, IndexError, TypeError):
+            # Fallback para erros inesperados ou problemas de conexão.
+            st.error("Ocorreu um erro ao tentar fazer login. Verifique a conexão ou as credenciais.")
         return None
 
 # --- FUNÇÕES DO PAINEL DE ADMIN ---
