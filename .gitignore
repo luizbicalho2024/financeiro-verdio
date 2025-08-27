@@ -1,0 +1,7 @@
+# Firebase credentials
+firebase_credentials.json
+
+# Arquivos de ambiente virtual
+venv/
+*.pyc
+__pycache__/
