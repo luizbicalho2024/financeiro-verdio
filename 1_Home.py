@@ -1,6 +1,7 @@
 import streamlit as st
 import firebase_admin
 from firebase_admin import credentials, auth, firestore
+from auth_functions import initialize_firebase, get_user_role
 import pandas as pd
 import ast  # <-- CORREÇÃO: Biblioteca importada para converter a string de credenciais
 
