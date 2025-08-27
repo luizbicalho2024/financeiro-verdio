@@ -59,7 +59,26 @@ def welcome_page():
     """)
     
     st.info("Lembre-se de manter suas credenciais seguras e fazer logout ao final de cada sessão.")
+# --- CÓDIGO DE DIAGNÓSTICO TEMPORÁRIO ---
+with st.expander("🔍 Diagnóstico de Secrets"):
+    st.write("Verificando os segredos carregados pelo Streamlit...")
+    if st.secrets.keys():
+        st.success("Secrets foram carregados!")
+        st.write("Chaves encontradas:", st.secrets.keys())
+        
+        # Verifica se as chaves específicas existem
+        if "firebase_credentials" in st.secrets:
+            st.info("A chave [firebase_credentials] foi encontrada.")
+        else:
+            st.error("ERRO: A chave [firebase_credentials] NÃO foi encontrada!")
 
+        if "firebase_config" in st.secrets:
+            st.info("A chave [firebase_config] foi encontrada.")
+        else:
+            st.error("ERRO: A chave [firebase_config] NÃO foi encontrada!")
+    else:
+        st.error("Nenhum Secret foi carregado pela aplicação.")
+# --- FIM DO CÓDIGO DE DIAGNÓSTICO ---
 # --- LÓGICA PRINCIPAL ---
 if 'authentication_status' not in st.session_state:
     st.session_state.authentication_status = None
