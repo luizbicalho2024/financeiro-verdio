@@ -4,7 +4,6 @@ import pyrebase
 import json
 
 # --- CONFIGURAÇÃO E INICIALIZAÇÃO DO FIREBASE ---
-# Colocamos a inicialização em uma função para garantir que seja executada apenas uma vez.
 @st.cache_resource
 def initialize_firebase():
     """
@@ -50,18 +49,29 @@ def login_user(auth, db, email, password):
         else:
             st.error("Perfil de usuário não encontrado. Contate o administrador.")
             return None
+            
+    # --- BLOCO DE ERRO CORRIGIDO ---
     except Exception as e:
+        # O erro do Pyrebase pode ter formatos diferentes. Esta lógica tenta extrair a melhor mensagem.
         try:
-            error_json = e.args[1]
-            error_message = json.loads(error_json)['error']['message']
-            if error_message == "EMAIL_NOT_FOUND":
+            # Tenta decodificar a resposta JSON esperada
+            error_data = json.loads(e.args[1])
+            error_message = error_data['error']['message']
+
+            # Mapeia as mensagens de erro comuns para textos mais amigáveis
+            if "INVALID_LOGIN_CREDENTIALS" in error_message:
+                st.error("Credenciais inválidas. Verifique seu email e senha.")
+            elif "EMAIL_NOT_FOUND" in error_message:
                 st.error("Email não encontrado.")
-            elif error_message == "INVALID_PASSWORD":
+            elif "INVALID_PASSWORD" in error_message:
                 st.error("Senha incorreta.")
             else:
-                st.error(f"Erro ao fazer login: {error_message}")
-        except (json.JSONDecodeError, KeyError, IndexError):
-            st.error(f"Ocorreu um erro inesperado durante o login.")
+                st.error(f"Erro do Firebase: {error_message}")
+
+        except (json.JSONDecodeError, KeyError, IndexError, TypeError):
+            # Se a decodificação falhar, mostra uma mensagem mais genérica
+            st.error("Credenciais inválidas ou ocorreu um erro de conexão. Tente novamente.")
+        
         return None
 
 # --- FUNÇÕES DO PAINEL DE ADMIN ---
