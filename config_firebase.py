@@ -12,8 +12,12 @@ try:
     firebase_creds_dict = dict(st.secrets["firebase_credentials"])
     firebase_config_dict = dict(st.secrets["firebase_config"])
     
+    # ==================================================================
+    # LINHA DE DIAGNÓSTICO: Mostra a qual projeto estamos conectados.
+    st.warning(f"CONECTADO AO PROJETO FIREBASE: {firebase_creds_dict.get('project_id')}")
+    # ==================================================================
+    
     # 2. Agora modifica a cópia, não o original
-    # (Esta linha não é mais estritamente necessária se você usa aspas triplas nos secrets, mas é bom mantê-la por robustez)
     if 'private_key' in firebase_creds_dict:
         firebase_creds_dict['private_key'] = firebase_creds_dict['private_key'].replace('\\n', '\n')
     
