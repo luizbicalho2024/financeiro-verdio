@@ -5,6 +5,7 @@ from config_firebase import get_db
 from datetime import datetime
 import pytz
 import streamlit_authenticator as stauth
+from google.api_core import exceptions # Importa a biblioteca de exceções do Google
 
 # Obtém a instância do banco de dados Firestore
 db = get_db()
@@ -32,7 +33,7 @@ def log_action(level, message, details=None):
         }
         db.collection('logs').add(log_entry)
     except Exception as e:
-        st.error(f"Erro ao registrar log: {e}")
+        # Evita exibir erros de log na tela do usuário final, apenas no console/logs do servidor
         print(f"Erro ao registrar log: {e}")
 
 # --- FUNÇÕES DE AUTENTICAÇÃO E USUÁRIO (PARA streamlit-authenticator) ---
@@ -41,19 +42,30 @@ def fetch_all_users_for_auth():
     """
     Busca todos os usuários do Firestore e formata para o streamlit-authenticator.
     """
-    users_ref = db.collection('users').stream()
     credentials = {'usernames': {}}
-    for user in users_ref:
-        user_data = user.to_dict()
-        username = user_data.get('username')
-        if username:
-            credentials['usernames'][username] = {
-                'name': user_data.get('name'),
-                'email': user_data.get('email'),
-                'password': user_data.get('hashed_password'),
-                'role': user_data.get('role', 'user') # Adiciona o role
-            }
-    return credentials
+    try:
+        # Tenta ler a coleção de usuários
+        users_ref = db.collection('users').stream()
+        for user in users_ref:
+            user_data = user.to_dict()
+            username = user_data.get('username')
+            # Garante que apenas usuários ativos possam logar
+            if username and user_data.get('is_active', False):
+                credentials['usernames'][username] = {
+                    'name': user_data.get('name'),
+                    'email': user_data.get('email'),
+                    'password': user_data.get('hashed_password'),
+                    'role': user_data.get('role', 'user')
+                }
+        return credentials
+    except exceptions.NotFound:
+        # Se a coleção 'users' não for encontrada (primeira execução), retorna vazio.
+        # Isso permite que a tela de criação do primeiro admin apareça.
+        return credentials
+    except Exception as e:
+        st.error(f"Erro crítico ao buscar usuários: {e}")
+        return credentials
+
 
 def add_user(username, name, email, password, role):
     """
@@ -99,21 +111,25 @@ def get_all_users():
     """
     Busca todos os usuários do Firestore para exibição no painel de admin.
     """
-    users_ref = db.collection('users').stream()
     users_list = []
-    for user in users_ref:
-        user_data = user.to_dict()
-        # Não inclui o hash da senha na exibição
-        user_display = {
-            "username": user_data.get("username"),
-            "name": user_data.get("name"),
-            "email": user_data.get("email"),
-            "role": user_data.get("role"),
-            "is_active": user_data.get("is_active"),
-            "created_at": user_data.get("created_at")
-        }
-        users_list.append(user_display)
-    return users_list
+    try:
+        users_ref = db.collection('users').stream()
+        for user in users_ref:
+            user_data = user.to_dict()
+            # Não inclui o hash da senha na exibição
+            user_display = {
+                "username": user_data.get("username"),
+                "name": user_data.get("name"),
+                "email": user_data.get("email"),
+                "role": user_data.get("role"),
+                "is_active": user_data.get("is_active"),
+                "created_at": user_data.get("created_at")
+            }
+            users_list.append(user_display)
+        return users_list
+    except exceptions.NotFound:
+        return users_list # Retorna lista vazia se a coleção não existir
+
 
 # --- FUNÇÕES DE FATURAMENTO (sem alterações) ---
 def get_pricing_config():
@@ -135,13 +151,17 @@ def log_faturamento(faturamento_data):
         st.error("Erro ao salvar o histórico no banco de dados.")
 
 def get_billing_history():
-    history_ref = db.collection('billing_history').order_by('data_geracao', direction='DESCENDING').stream()
     history_list = []
-    for item in history_ref:
-        data = item.to_dict()
-        data['_id'] = item.id
-        history_list.append(data)
+    try:
+        history_ref = db.collection('billing_history').order_by('data_geracao', direction='DESCENDING').stream()
+        for item in history_ref:
+            data = item.to_dict()
+            data['_id'] = item.id
+            history_list.append(data)
+    except exceptions.NotFound:
+        pass # Se não houver histórico, retorna lista vazia
     return history_list
+
 
 def delete_billing_history(history_id):
     try:
@@ -154,5 +174,10 @@ def delete_billing_history(history_id):
         return False
         
 def get_system_logs():
-    logs_ref = db.collection('logs').order_by('timestamp', direction='DESCENDING').stream()
-    return [log.to_dict() for log in logs_ref]
+    logs_list = []
+    try:
+        logs_ref = db.collection('logs').order_by('timestamp', direction='DESCENDING').stream()
+        logs_list = [log.to_dict() for log in logs_ref]
+    except exceptions.NotFound:
+        pass # Se não houver logs, retorna lista vazia
+    return logs_list
