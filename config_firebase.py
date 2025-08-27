@@ -6,13 +6,14 @@ import streamlit as st
 # --- CONFIGURAÇÃO PYREBASE (PARA AUTENTICAÇÃO DO LADO DO CLIENTE) ---
 # Substitua com as credenciais do seu aplicativo da Web do Firebase
 FIREBASE_CONFIG = {
-    "apiKey": "SUA_API_KEY",
-    "authDomain": "SEU_AUTH_DOMAIN.firebaseapp.com",
-    "projectId": "SEU_PROJECT_ID",
-    "storageBucket": "SEU_STORAGE_BUCKET.appspot.com",
-    "messagingSenderId": "SEU_MESSAGING_SENDER_ID",
-    "appId": "SEU_APP_ID",
-    "databaseURL": "https://SEU_DATABASE_URL.firebaseio.com/" # Opcional, mas recomendado
+    "apiKey":"AIzaSyDmdjlRRFkxnVUjQxZ-vrvYdIRA834GLhw",
+    "authDomain": "financeiro-verdio.firebaseapp.com",
+    "projectId": "financeiro-verdio",
+    "storageBucket": "financeiro-verdio.firebasestorage.app",
+    "messagingSenderId": "1025401913741",
+    "appId": "1:1025401913741:web:1f0ddc584a51b3b1acfdc4",
+    "databaseURL": "https://SEU_DATABASE_URL.firebaseio.com/",
+    "measurementId": "G-4DM3428F0E"
 }
 
 # --- INICIALIZAÇÃO FIREBASE ADMIN SDK (PARA OPERAÇÕES DE BACKEND) ---
