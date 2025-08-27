@@ -1,51 +1,67 @@
+import streamlit as st
 import firebase_admin
 from firebase_admin import credentials, firestore, auth
 import pyrebase
-import streamlit as st
+import json
 
-# --- CONFIGURAÇÃO PYREBASE (PARA AUTENTICAÇÃO DO LADO DO CLIENTE) ---
-# Substitua com as credenciais do seu aplicativo da Web do Firebase
-FIREBASE_CONFIG = {
-    "apiKey":"AIzaSyDmdjlRRFkxnVUjQxZ-vrvYdIRA834GLhw",
-    "authDomain": "financeiro-verdio.firebaseapp.com",
-    "projectId": "financeiro-verdio",
-    "storageBucket": "financeiro-verdio.firebasestorage.app",
-    "messagingSenderId": "1025401913741",
-    "appId": "1:1025401913741:web:1f0ddc584a51b3b1acfdc4",
-    "databaseURL": "https://SEU_DATABASE_URL.firebaseio.com/",
-    "measurementId": "G-4DM3428F0E"
-}
-
-# --- INICIALIZAÇÃO FIREBASE ADMIN SDK (PARA OPERAÇÕES DE BACKEND) ---
+# --- Tenta carregar as credenciais do Streamlit Secrets ---
 try:
-    # Tenta inicializar o app usando as credenciais do Streamlit secrets
-    # Ideal para deploy no Streamlit Community Cloud
+    # Para deploy no Streamlit Community Cloud
     firebase_creds_dict = st.secrets["firebase_credentials"]
+    firebase_config_dict = st.secrets["firebase_config"]
+    
+    # Converte a chave privada que pode vir com escapes incorretos
+    firebase_creds_dict['private_key'] = firebase_creds_dict['private_key'].replace('\\n', '\n')
+    
     cred = credentials.Certificate(firebase_creds_dict)
-
+    
+# --- Se falhar, tenta carregar do arquivo local (para desenvolvimento) ---
 except (KeyError, FileNotFoundError):
-    # Fallback para o arquivo local, ideal para desenvolvimento
     try:
         cred = credentials.Certificate("firebase_credentials.json")
+        # Para carregar a config localmente, podemos criar um segundo arquivo ou embutir,
+        # mas para o Pyrebase, é mais fácil usar o que já temos.
+        with open("firebase_credentials.json") as f:
+            local_creds = json.load(f)
+        
+        # NOTE: Para a autenticação do Pyrebase, ainda precisamos da apiKey, etc.
+        # A melhor prática local seria ter um arquivo de configuração separado e ignorado.
+        # Por simplicidade aqui, vamos preencher com placeholders se não estiver no st.secrets.
+        # Lembre-se de substituir com sua config real se precisar testar a autenticação localmente.
+        firebase_config_dict = {
+            "apiKey": "SUA_API_KEY_LOCAL", # Substitua se for testar localmente
+            "authDomain": f"{local_creds['project_id']}.firebaseapp.com",
+            "projectId": local_creds['project_id'],
+            "storageBucket": f"{local_creds['project_id']}.appspot.com",
+            "messagingSenderId": "SEU_MESSAGING_SENDER_ID_LOCAL",
+            "appId": "SEU_APP_ID_LOCAL",
+            "databaseURL": f"https://{local_creds['project_id']}.firebaseio.com/"
+        }
     except Exception as e:
-        st.error("Arquivo de credenciais 'firebase_credentials.json' não encontrado.")
+        st.error("Falha ao carregar as credenciais do Firebase.")
+        st.info("Certifique-se de que o arquivo 'firebase_credentials.json' está na pasta raiz ou que os segredos estão configurados no Streamlit Cloud.")
         st.stop()
 
-# Inicializa o app principal apenas uma vez
+
+# --- INICIALIZAÇÃO DOS SERVIÇOS ---
+
+# Inicializa o Firebase Admin SDK (para backend)
+# A verificação `if not firebase_admin._apps:` previne a reinicialização se o script recarregar.
 if not firebase_admin._apps:
     firebase_admin.initialize_app(cred)
 
-# Inicializa Pyrebase para autenticação
+# Inicializa o Pyrebase (para autenticação do lado do cliente)
 try:
-    firebase_auth_app = pyrebase.initialize_app(FIREBASE_CONFIG)
+    firebase_auth_app = pyrebase.initialize_app(firebase_config_dict)
 except Exception as e:
-    st.error(f"Erro ao inicializar o Pyrebase. Verifique sua configuração FIREBASE_CONFIG: {e}")
+    st.error(f"Erro ao inicializar o Pyrebase. Verifique sua configuração: {e}")
     st.stop()
 
 
 # Acessa os serviços do Firebase
 db = firestore.client()
 firebase_auth = firebase_auth_app.auth()
+admin_auth = auth
 
 def get_db():
     """Retorna a instância do cliente Firestore."""
@@ -57,4 +73,4 @@ def get_auth():
 
 def get_admin_auth():
     """Retorna o módulo de autenticação do Firebase Admin SDK."""
-    return auth
+    return admin_auth
