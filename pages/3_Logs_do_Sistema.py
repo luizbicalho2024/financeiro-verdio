@@ -1,4 +1,10 @@
 # pages/3_Logs_do_Sistema.py
+import sys
+import os
+
+# Adiciona o diretório raiz do projeto ao sys.path para resolver o ImportError
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 import streamlit as st
 import pandas as pd
 import user_management_db as umdb
@@ -43,7 +49,7 @@ else:
     
     # Filtro por usuário
     users = df_logs['user'].unique()
-    selected_users = st.sidebar.multisepreselect("Usuário", options=users, default=list(users))
+    selected_users = st.sidebar.multiselect("Usuário", options=users, default=list(users))
     
     # Aplicar filtros
     filtered_df = df_logs[
