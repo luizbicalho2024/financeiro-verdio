@@ -1,4 +1,10 @@
 # pages/6_Faturamento.py
+import sys
+import os
+
+# Adiciona o diretório raiz do projeto ao sys.path para resolver o ImportError
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 import streamlit as st
 import pandas as pd
 from datetime import datetime
@@ -94,8 +100,6 @@ def to_excel(df_cheio, df_ativados, df_desativados):
     return output.getvalue()
 
 def create_pdf_report(nome_cliente, periodo, totais, df_cheio, df_ativados, df_desativados):
-    # (O código da função create_pdf_report foi mantido como no original, pois é complexo e específico.
-    # Certifique-se que o caminho "imgs/logo.png" está correto na sua estrutura de pastas.)
     pdf = FPDF(orientation='L', unit='mm', format='A4')
     pdf.add_page()
     try:
@@ -178,7 +182,6 @@ if uploaded_file:
         if error_message:
             st.error(f"❌ {error_message}")
         elif df_cheio is not None:
-            # Cálculos de totais
             total_faturamento_cheio = df_cheio['Valor a Faturar'].sum()
             faturamento_proporcional_total = df_ativados['Valor a Faturar'].sum() + df_desativados['Valor a Faturar'].sum()
             faturamento_total_geral = total_faturamento_cheio + faturamento_proporcional_total
@@ -186,23 +189,16 @@ if uploaded_file:
             total_gprs = len(df_total[df_total['Tipo'] == 'GPRS'])
             total_satelital = len(df_total[df_total['Tipo'] == 'Satelital'])
             
-            # Exibição do resumo
             st.header("Resumo do Faturamento")
             st.subheader(f"Cliente: {nome_cliente}")
             st.caption(f"Período: {periodo_relatorio}")
             
-            # Métricas
             col1, col2, col3, col4 = st.columns(4)
             col1.metric("Nº Fat. Cheio", len(df_cheio))
             col2.metric("Nº Fat. Proporcional", len(df_ativados) + len(df_desativados))
             col3.metric("Total GPRS", total_gprs)
             col4.metric("Total Satelitais", total_satelital)
             
-            # ... (código de exibição e download continua igual)
-            
-            st.markdown("---")
-
-            # Preparação dos dados para log e PDF
             faturamento_data_log = {
                 "cliente": nome_cliente, "periodo_relatorio": periodo_relatorio,
                 "valor_total": faturamento_total_geral, "terminais_cheio": len(df_cheio),
@@ -210,7 +206,6 @@ if uploaded_file:
                 "gerado_por": st.session_state.get("email", "N/A")
             }
             
-            # Ações Finais
             st.subheader("Ações Finais")
             col_btn1, col_btn2 = st.columns(2)
 
@@ -223,9 +218,5 @@ if uploaded_file:
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     on_click=umdb.log_faturamento, args=(faturamento_data_log,)
                 )
-            
-            # ... (Restante do código de exibição e download)
-
-
 else:
     st.info("Aguardando o carregamento do relatório para iniciar a análise.")
