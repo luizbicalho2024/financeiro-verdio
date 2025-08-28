@@ -228,10 +228,7 @@ if st.button("🚀 Gerar Texto do Relatório", type="primary"):
                 st.success(f"Dados processados! {len(dados_agrupados)} secretarias encontradas.")
                 st.markdown("---")
                 st.subheader("3. Resultado Final")
-                st.info("Clique no ícone no canto superior direito de cada bloco para copiar o texto.")
 
-                # --- MUDANÇA AQUI ---
-                # Em vez de uma única caixa de texto, gera um bloco de código para cada secretaria
                 for secretaria, dados in sorted(dados_agrupados.items()):
                     empenho_automatico = mapa_empenhos.get(secretaria, "EMPENHO NÃO ENCONTRADO")
                     
@@ -245,6 +242,10 @@ if st.button("🚀 Gerar Texto do Relatório", type="primary"):
                     
                     texto_gerado = gerar_texto_relatorio(dados, inputs_manuais, empenho_automatico)
                     
-                    # Exibe o título da secretaria e o bloco de código
                     st.markdown(f"#### {secretaria}")
-                    st.code(texto_gerado, language=None)
+                    # --- MUDANÇA AQUI ---
+                    # Usa st.warning se o empenho não for encontrado, senão, usa st.code
+                    if empenho_automatico == "EMPENHO NÃO ENCONTRADO":
+                        st.warning(texto_gerado)
+                    else:
+                        st.code(texto_gerado, language=None)
