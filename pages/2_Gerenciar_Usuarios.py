@@ -1,4 +1,10 @@
 # pages/2_Gerenciar_Usuarios.py
+import sys
+import os
+
+# Adiciona o diretório raiz do projeto ao sys.path para resolver o ImportError
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 import streamlit as st
 import pandas as pd
 from auth_functions import get_all_users, create_new_user, update_user_status, update_user_role
