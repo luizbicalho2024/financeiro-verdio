@@ -2,9 +2,9 @@
 import streamlit as st
 from firebase_config import auth_client, db
 
-st.set_page_config(page_title="Login", page_icon="🔑", layout="centered")
+st.set_page_config(page_title="Login", page_icon="", layout="centered")
 
-st.title("🔑 Sistema de Login Verdio")
+st.title("Sistema Financeiro")
 
 # --- Lógica de Login ---
 if 'user_info' in st.session_state:
