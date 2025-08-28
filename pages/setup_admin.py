@@ -1,4 +1,10 @@
 # pages/setup_admin.py
+import sys
+import os
+
+# Adiciona o diretório raiz do projeto ao sys.path para resolver o ImportError
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 import streamlit as st
 from auth_functions import create_new_user
 
