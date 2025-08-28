@@ -212,9 +212,9 @@ if st.button("🚀 Gerar Texto do Relatório", type="primary"):
                     secretaria_normalizada = normalizar_texto(secretaria_original)
                     empenho_automatico = mapa_empenhos.get(secretaria_normalizada)
                     if not empenho_automatico:
-                        nome_mapeado_normalizado = normalizar_texto(MAPEAMENTO_SECRETARIAS.get(secretaria_normalizada))
-                        if nome_mapeado_normalizado:
-                            empenho_automatico = mapa_empenhos.get(nome_mapeado_normalizado)
+                        nome_mapeado = MAPEAMENTO_SECRETARIAS.get(secretaria_normalizada)
+                        if nome_mapeado:
+                            empenho_automatico = mapa_empenhos.get(normalizar_texto(nome_mapeado))
                     if not empenho_automatico:
                         empenho_automatico = "EMPENHO NÃO ENCONTRADO"
                         if secretaria_original != "Secretaria Não Informada":
