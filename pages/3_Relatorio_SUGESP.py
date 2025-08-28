@@ -8,8 +8,16 @@ import pandas as pd
 import requests
 from datetime import datetime, timedelta
 import io
+import locale # <--- 1. BIBLIOTECA DE LOCALIZAÇÃO IMPORTADA
 
-# --- 1. CONFIGURAÇÃO DA PÁGINA E AUTENTICAÇÃO ---
+# --- 2. DEFINE O IDIOMA PARA PORTUGUÊS DO BRASIL ---
+try:
+    locale.setlocale(locale.LC_TIME, 'pt_BR.UTF-8')
+except locale.Error:
+    st.warning("Local 'pt_BR.UTF-8' não encontrado. O mês pode aparecer em inglês.")
+
+
+# --- CONFIGURAÇÃO DA PÁGINA E AUTENTICAÇÃO ---
 st.set_page_config(
     layout="wide",
     page_title="Gerador de Relatório de Faturamento",
@@ -31,7 +39,7 @@ if st.sidebar.button("Logout"):
     st.switch_page("1_Home.py")
 
 
-# --- 2. FUNÇÕES DE LÓGICA ---
+# --- FUNÇÕES DE LÓGICA ---
 
 @st.cache_data(ttl=600)
 def buscar_dados_api(token, endpoint):
@@ -75,9 +83,7 @@ def mapear_ir_produtos(dados_produtos):
     if not dados_produtos:
         return mapa_ir
     for produto in dados_produtos:
-        # A API de transações usa o ID do produto para o join
         produto_id = produto.get('id')
-        # A alíquota vem como percentual, então dividimos por 100
         aliquota = float(produto.get('aliquota_ir', 0)) / 100.0
         if produto_id:
             mapa_ir[produto_id] = aliquota
@@ -96,7 +102,7 @@ def processar_dados_para_relatorio(dados_transacoes, nome_cliente_principal, map
         'valor_total': 'Valor Bruto',
         'valor_liquido_cliente': 'Valor Liquido',
         'informacao.produto.nome': 'Produto',
-        'produto_id': 'ID do Produto' # Coluna necessária para o join do IR
+        'produto_id': 'ID do Produto'
     }, inplace=True)
     
     df_filtrado = df[df['Cliente'].str.contains(nome_cliente_principal, case=False, na=False)].copy()
@@ -108,7 +114,6 @@ def processar_dados_para_relatorio(dados_transacoes, nome_cliente_principal, map
     for col in ['Valor Bruto', 'Valor Liquido', 'ID do Produto']:
         df_filtrado[col] = pd.to_numeric(df_filtrado[col], errors='coerce').fillna(0)
 
-    # Calcula o IR para cada transação individualmente usando o mapa de IR
     df_filtrado['IR Retido'] = df_filtrado.apply(
         lambda row: row['Valor Bruto'] * mapa_ir.get(row['ID do Produto'], 0),
         axis=1
@@ -158,7 +163,7 @@ def gerar_texto_relatorio(dados_secretaria, inputs_manuais, empenho_automatico):
     return relatorio
 
 
-# --- 3. INTERFACE DA PÁGINA ---
+# --- INTERFACE DA PÁGINA ---
 st.title("✍️ Gerador de Relatório de Faturamento")
 st.markdown("Gere o texto final para faturamento a partir dos dados da API e informações manuais.")
 st.markdown("---")
@@ -179,7 +184,8 @@ st.subheader("2. Informações Manuais para o Relatório")
 col_a, col_b = st.columns(2)
 with col_a:
     contrato = st.text_input("Nº do Contrato", "1551/2024")
-    periodo = st.text_input("Período", f"{data_inicio.strftime('%B/%Y')}")
+    # Agora usa strftime com o locale em português
+    periodo = st.text_input("Período", f"{data_inicio.strftime('%B/%Y').capitalize()}")
     vencimento = st.date_input("Vencimento", hoje + timedelta(days=30))
 
 with col_b:
@@ -198,13 +204,11 @@ with col_e:
 
 if st.button("🚀 Gerar Texto do Relatório", type="primary"):
     with st.spinner("Buscando e processando os dados... (Isso pode levar um momento)"):
-        # Busca dados das três APIs
         endpoint_transacoes = f"transacoes?TransacaoSearch[data_cadastro]={data_inicio.strftime('%d/%m/%Y')} - {data_fim.strftime('%d/%m/%Y')}"
         dados_transacoes, erro_transacoes = buscar_dados_api(token, endpoint_transacoes)
         dados_empenhos, erro_empenhos = buscar_dados_api(token, "empenhos?expand=contrato.empresa,grupo")
         dados_produtos, erro_produtos = buscar_dados_api(token, "produtos?expand=categoria")
 
-        # Verifica erros em cascata
         if erro_transacoes:
             st.error(erro_transacoes)
         elif erro_empenhos:
@@ -212,7 +216,6 @@ if st.button("🚀 Gerar Texto do Relatório", type="primary"):
         elif erro_produtos:
             st.error(erro_produtos)
         else:
-            # Processa os dados
             mapa_empenhos = mapear_empenhos(dados_empenhos)
             mapa_ir = mapear_ir_produtos(dados_produtos)
             dados_agrupados = processar_dados_para_relatorio(dados_transacoes, nome_cliente, mapa_ir)
