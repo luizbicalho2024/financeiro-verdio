@@ -39,9 +39,10 @@ MAPEAMENTO_SECRETARIAS = {
     "POLICIA CIVIL": "POLÍCIA CIVIL",
     "CORPO DE BOMBEIROS MILITAR DE RONDONIA": "CORPO DE BOMBEIROS MILITAR",
     "EMATER": "EMATER-RO",
-    "CAP": "CASA DE APOIO A SAUDE DO INDIO",
-    "CAD/FROTA": "SUGESP - COORDENADORIA DE APOIO LOGISTICO E GESTAO DE FROTA",
+    "VEICULOS - REGIONAIS": "SUGESP - COORDENADORIA DE APOIO LOGISTICO E GESTAO DE FROTA",
+    "VEICULOS - SUGESP": "SUGESP - COORDENADORIA DE APOIO LOGISTICO E GESTAO DE FROTA",
     # Adicione outras correspondências aqui conforme necessário
+    # Ex: "SRE/JARU": "NOME COMPLETO DA SRE JARU NA API DE EMPENHOS",
 }
 
 
@@ -125,7 +126,6 @@ def gerar_texto_relatorio(dados_secretaria, inputs_manuais, empenho_automatico):
     consumo_str = ", ".join([f"{i+1}. {produto} R$ {valor:,.2f}" for i, (produto, valor) in enumerate(dados_secretaria['Consumo'].items())])
     ir_item_str = "; ".join([f"{i+1} - IR R$ {valor:,.2f}" for i, (produto, valor) in enumerate(dados_secretaria['IR por Item'].items()) if produto in dados_secretaria['Consumo']])
     
-    # Constrói a string parte por parte para evitar erros de formatação
     partes = [
         f"(CONTRATO nº {inputs_manuais['contrato']}/PGE-SUGESP – {inputs_manuais['secretaria_nome']})",
         f"Valor Bruto: R$ {dados_secretaria['Valor Bruto']:,.2f}",
@@ -213,12 +213,13 @@ if st.button("🚀 Gerar Texto do Relatório", type="primary"):
                     secretaria_normalizada = normalizar_texto(secretaria_original)
                     empenho_automatico = mapa_empenhos.get(secretaria_normalizada)
                     if not empenho_automatico:
-                        nome_mapeado = MAPEAMENTO_SECRETARIAS.get(secretaria_normalizada)
-                        if nome_mapeado:
-                            empenho_automatico = mapa_empenhos.get(normalizar_texto(nome_mapeado))
+                        nome_mapeado_normalizado = normalizar_texto(MAPEAMENTO_SECRETARIAS.get(secretaria_normalizada))
+                        if nome_mapeado_normalizado:
+                            empenho_automatico = mapa_empenhos.get(nome_mapeado_normalizado)
                     if not empenho_automatico:
                         empenho_automatico = "EMPENHO NÃO ENCONTRADO"
-                        secretarias_sem_empenho.append(secretaria_original)
+                        if secretaria_original != "Secretaria Não Informada":
+                            secretarias_sem_empenho.append(secretaria_original)
                     inputs_manuais = {
                         "contrato": contrato, "secretaria_nome": secretaria_original,
                         "periodo": periodo, "vencimento": vencimento.strftime('%d/%m/%Y'),
