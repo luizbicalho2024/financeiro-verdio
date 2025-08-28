@@ -32,9 +32,8 @@ if st.sidebar.button("Logout"):
 
 
 # --- DICIONÁRIO DE MAPEAMENTO MANUAL ---
-# Se uma secretaria da API de transações não encontra um empenho,
-# adicione o nome dela (da lista "copie daqui") e, ao lado, 
-# o nome correspondente da API de empenhos (da lista "cole aqui").
+# ESTA É A FERRAMENTA PARA CORRIGIR EMPENHOS NÃO ENCONTRADOS.
+# Formato: "NOME NA API DE TRANSAÇÕES": "NOME CORRESPONDENTE NA API DE EMPENHOS",
 MAPEAMENTO_SECRETARIAS = {
     "POLICIA CIVIL": "POLÍCIA CIVIL",
     "CORPO DE BOMBEIROS MILITAR DE RONDONIA": "CORPO DE BOMBEIROS MILITAR",
@@ -121,7 +120,7 @@ def processar_dados_para_relatorio(dados_transacoes, nome_cliente_principal):
     return dados_agrupados
 
 def gerar_texto_relatorio(dados_secretaria, inputs_manuais, empenho_automatico):
-    """Monta a string final para uma secretaria específica."""
+    """Monta a string final para uma secretaria específica de forma robusta."""
     consumo_str = ", ".join([f"{i+1}. {produto} R$ {valor:,.2f}" for i, (produto, valor) in enumerate(dados_secretaria['Consumo'].items())])
     ir_item_str = "; ".join([f"{i+1} - IR R$ {valor:,.2f}" for i, (produto, valor) in enumerate(dados_secretaria['IR por Item'].items()) if produto in dados_secretaria['Consumo']])
     
