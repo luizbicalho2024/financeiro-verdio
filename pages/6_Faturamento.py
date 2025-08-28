@@ -17,7 +17,7 @@ st.set_page_config(
     page_icon="💲"
 )
 
-# --- VERIFICAÇÃO DE LOGIN (CORRIGIDO) ---
+# --- VERIFICAÇÃO DE LOGIN ---
 if "user_info" not in st.session_state:
     st.error("🔒 Acesso Negado! Por favor, faça login para visualizar esta página.")
     st.stop()
@@ -36,8 +36,7 @@ if st.sidebar.button("Logout"):
 @st.cache_data
 def processar_planilha_faturamento(file_bytes, valor_gprs, valor_satelital):
     """
-    Lê a planilha a partir dos bytes do arquivo, extrai informações, classifica, 
-    calcula e retorna os dataframes de faturamento.
+    Lê a planilha, extrai informações, classifica, calcula e retorna os dataframes de faturamento.
     """
     try:
         uploaded_file = io.BytesIO(file_bytes)
@@ -46,10 +45,10 @@ def processar_planilha_faturamento(file_bytes, valor_gprs, valor_satelital):
 
         required_cols = ['Cliente', 'Terminal', 'Data Ativação', 'Data Desativação', 'Dias Ativos Mês', 'Suspenso Dias Mes', 'Nº Equipamento', 'Condição']
         if not all(col in df.columns for col in required_cols):
-            return None, None, None, None, None, "Erro de Colunas: Verifique se o cabeçalho está na linha 12 e se todas as colunas necessárias existem."
+            return None, None, None, None, None, "Erro de Colunas: Verifique o cabeçalho na linha 12."
 
-        nome_cliente = str(df['Cliente'].dropna().iloc[0]).strip() if not df['Cliente'].dropna().empty else "Cliente não identificado"
-        
+        nome_cliente = str(df['Cliente'].dropna().iloc[0]).strip() if not df.empty and 'Cliente' in df.columns else "Cliente não identificado"
+              
         df.dropna(subset=['Terminal'], inplace=True)
         df['Terminal'] = df['Terminal'].astype(str).str.strip()
         df['Data Ativação'] = pd.to_datetime(df['Data Ativação'], errors='coerce', dayfirst=True)
@@ -94,7 +93,6 @@ def processar_planilha_faturamento(file_bytes, valor_gprs, valor_satelital):
             df_cheio['Valor a Faturar'] = (df_cheio['Valor Unitario'] / dias_no_mes) * df_cheio['Dias a Faturar']
         
         return nome_cliente, periodo_relatorio, df_cheio, df_ativados, df_desativados, None
-
     except Exception as e:
         return None, None, None, None, None, f"Ocorreu um erro inesperado ao processar o arquivo: {e}"
 
@@ -125,17 +123,80 @@ def create_pdf_report(nome_cliente, periodo, totais, df_cheio, df_ativados, df_d
     pdf.cell(0, 8, f"Periodo: {periodo}", 0, 1, "L")
     pdf.ln(5)
 
-    # ... (O resto da função de criar PDF permanece igual) ...
+    pdf.set_font("Arial", "B", 10)
+    pdf.cell(69, 8, "Nº Fat. Cheio", 1, 0, "C")
+    pdf.cell(69, 8, "Nº Fat. Proporcional", 1, 0, "C")
+    pdf.cell(69, 8, "Total Terminais GPRS", 1, 0, "C")
+    pdf.cell(69, 8, "Total Terminais Satelitais", 1, 1, "C")
+    pdf.set_font("Arial", "", 10)
+    pdf.cell(69, 8, str(totais['terminais_cheio']), 1, 0, "C")
+    pdf.cell(69, 8, str(totais['terminais_proporcional']), 1, 0, "C")
+    pdf.cell(69, 8, str(totais['terminais_gprs']), 1, 0, "C")
+    pdf.cell(69, 8, str(totais['terminais_satelitais']), 1, 1, "C")
+    pdf.ln(5)
 
-    # A função original tinha um bug no output, o correto é usar encode('latin-1')
+    pdf.set_font("Arial", "B", 11)
+    pdf.cell(138, 8, "Faturamento (Cheio)", 1, 0, "C")
+    pdf.cell(138, 8, "Faturamento (Proporcional)", 1, 1, "C")
+    pdf.set_font("Arial", "", 11)
+    pdf.cell(138, 8, f"R$ {totais['cheio']:,.2f}", 1, 0, "C")
+    pdf.cell(138, 8, f"R$ {totais['proporcional']:,.2f}", 1, 1, "C")
+    pdf.set_font("Arial", "B", 11)
+    pdf.cell(0, 10, f"FATURAMENTO TOTAL: R$ {totais['geral']:,.2f}", 1, 1, "C")
+    pdf.ln(10)
+
+    def draw_table(title, df, col_widths, available_cols):
+        if not df.empty:
+            pdf.set_font("Arial", "B", 12)
+            pdf.cell(0, 10, title, 0, 1, "L")
+            pdf.set_font("Arial", "B", 8)
+            
+            header = [h for h in available_cols if h in df.columns]
+            
+            for h in header:
+                pdf.cell(col_widths.get(h, 20), 7, h, 1, 0, 'C')
+            pdf.ln()
+
+            pdf.set_font("Arial", "", 7)
+            for _, row in df.iterrows():
+                for h in header:
+                    cell_text = str(row[h])
+                    if isinstance(row[h], datetime) and pd.notna(row[h]):
+                        cell_text = row[h].strftime('%d/%m/%Y')
+                    elif isinstance(row[h], (float, int)):
+                        cell_text = f"R$ {row[h]:,.2f}" if 'Valor' in h else str(int(row[h]))
+                    elif pd.isna(row[h]):
+                        cell_text = ""
+                    pdf.cell(col_widths.get(h, 20), 6, cell_text, 1, 0, 'C')
+                pdf.ln()
+            pdf.ln(5)
+
+    cols_cheio = ['Terminal', 'Nº Equipamento', 'Placa', 'Tipo', 'Valor a Faturar']
+    widths_cheio = {'Terminal': 60, 'Nº Equipamento': 60, 'Placa': 60, 'Tipo': 47, 'Valor a Faturar': 50}
+    draw_table("Detalhamento do Faturamento Cheio", df_cheio, widths_cheio, cols_cheio)
+    
+    cols_ativados = ['Terminal', 'Nº Equipamento', 'Placa', 'Tipo', 'Data Ativação', 'Dias Ativos Mês', 'Suspenso Dias Mes', 'Dias a Faturar', 'Valor Unitario', 'Valor a Faturar']
+    widths_ativados = {
+        'Terminal': 25, 'Nº Equipamento': 30, 'Placa': 25, 'Tipo': 20, 'Data Ativação': 25,
+        'Dias Ativos Mês': 20, 'Suspenso Dias Mes': 25, 'Dias a Faturar': 20, 
+        'Valor Unitario': 30, 'Valor a Faturar': 30
+    }
+    draw_table("Detalhamento Proporcional (Ativações no Mês)", df_ativados, widths_ativados, cols_ativados)
+
+    cols_desativados = ['Terminal', 'Nº Equipamento', 'Placa', 'Tipo', 'Data Desativação', 'Dias Ativos Mês', 'Suspenso Dias Mes', 'Dias a Faturar', 'Valor Unitario', 'Valor a Faturar']
+    widths_desativados = {
+        'Terminal': 25, 'Nº Equipamento': 30, 'Placa': 25, 'Tipo': 20,
+        'Data Desativação': 25, 'Dias Ativos Mês': 20, 'Suspenso Dias Mes': 25, 
+        'Dias a Faturar': 20, 'Valor Unitario': 30, 'Valor a Faturar': 30
+    }
+    draw_table("Detalhamento Proporcional (Desativações no Mês)", df_desativados, widths_desativados, cols_desativados)
+    
     return bytes(pdf.output(dest='S').encode('latin-1'))
-
 
 # --- 3. INTERFACE DA PÁGINA ---
 try:
     st.image("imgs/logo.png", width=250)
-except FileNotFoundError:
-    st.warning("Arquivo de logo 'imgs/logo.png' não encontrado.")
+except: pass
 
 st.markdown("<h1 style='text-align: center; color: #006494;'>💲 Assistente de Faturamento</h1>", unsafe_allow_html=True)
 st.markdown("---")
@@ -143,8 +204,8 @@ st.markdown("---")
 # --- 4. INPUTS DE CONFIGURAÇÃO ---
 st.sidebar.header("Valores de Faturamento")
 pricing_config = umdb.get_pricing_config()
-default_gprs = float(pricing_config.get("PRECOS_PF", {}).get("GPRS / Gsm", 59.90))
-default_satelital = float(pricing_config.get("PLANOS_PJ", {}).get("36 Meses", {}).get("Satélite", 159.90))
+default_gprs = float(pricing_config.get("PRECOS_PF", {}).get("GPRS / Gsm", 0.0))
+default_satelital = float(pricing_config.get("PLANOS_PJ", {}).get("36 Meses", {}).get("Satélite", 0.0))
 valor_gprs = st.sidebar.number_input("Valor Unitário Mensal (GPRS)", min_value=0.0, value=default_gprs, step=1.0, format="%.2f")
 valor_satelital = st.sidebar.number_input("Valor Unitário Mensal (Satelital)", min_value=0.0, value=default_satelital, step=1.0, format="%.2f")
 
@@ -163,11 +224,11 @@ if uploaded_file:
         nome_cliente, periodo_relatorio, df_cheio, df_ativados, df_desativados, error_message = processar_planilha_faturamento(file_bytes, valor_gprs, valor_satelital)
         
         if error_message:
-            st.error(f"❌ {error_message}")
+            st.error(error_message)
         elif df_cheio is not None:
-            total_faturamento_cheio = df_cheio['Valor a Faturar'].sum()
-            total_faturamento_ativados = df_ativados['Valor a Faturar'].sum()
-            total_faturamento_desativados = df_desativados['Valor a Faturar'].sum()
+            total_faturamento_cheio = df_cheio['Valor a Faturar'].sum() if not df_cheio.empty else 0
+            total_faturamento_ativados = df_ativados['Valor a Faturar'].sum() if not df_ativados.empty else 0
+            total_faturamento_desativados = df_desativados['Valor a Faturar'].sum() if not df_desativados.empty else 0
             faturamento_proporcional_total = total_faturamento_ativados + total_faturamento_desativados
             faturamento_total_geral = total_faturamento_cheio + faturamento_proporcional_total
 
@@ -199,8 +260,7 @@ if uploaded_file:
                 "terminais_cheio": len(df_cheio), "terminais_proporcional": len(df_ativados) + len(df_desativados),
                 "terminais_gprs": total_gprs, "terminais_satelitais": total_satelital
             }
-            # pdf_data = create_pdf_report(nome_cliente, periodo_relatorio, totais_pdf, df_cheio, df_ativados, df_desativados)
-            
+            pdf_data = create_pdf_report(nome_cliente, periodo_relatorio, totais_pdf, df_cheio, df_ativados, df_desativados)
             faturamento_data_log = {
                 "cliente": nome_cliente, "periodo_relatorio": periodo_relatorio,
                 "valor_total": faturamento_total_geral, "terminais_cheio": len(df_cheio),
@@ -218,13 +278,14 @@ if uploaded_file:
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     on_click=umdb.log_faturamento, args=(faturamento_data_log,)
                 )
-            # with col_btn2:
-                # st.download_button(
-                #     label="📄 Exportar Resumo em PDF",
-                #     data=pdf_data,
-                #     file_name=f"Resumo_Faturamento_{nome_cliente.replace(' ', '_')}_{datetime.now().strftime('%Y-%m')}.pdf",
-                #     mime="application/pdf"
-                # )
+            with col_btn2:
+                st.download_button(
+                    label="📄 Exportar Resumo em PDF",
+                    data=pdf_data,
+                    file_name=f"Resumo_Faturamento_{nome_cliente.replace(' ', '_')}_{datetime.now().strftime('%Y-%m')}.pdf",
+                    mime="application/pdf",
+                    on_click=umdb.log_faturamento, args=(faturamento_data_log,)
+                )
 
             st.markdown("---")
 
