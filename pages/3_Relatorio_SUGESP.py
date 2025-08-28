@@ -43,10 +43,54 @@ MAPEAMENTO_SECRETARIAS = {
     "SRE/JARU": "SECRETARIA REGIONAL DE EDUCACAO DE JARU",
     "SRE/OURO PRETO DO OESTE": "SECRETARIA REGIONAL DE EDUCACAO DE OURO PRETO",
     "SRE/VILHENA": "SECRETARIA REGIONAL DE EDUCACAO DE VILHENA",
+    "SRE/ALTA FLORESTA DO OESTE": "SECRETARIA REGIONAL DE EDUCACAO DE ALTA FLORESTA",
+    "SRE/CEREJEIRAS": "SECRETARIA REGIONAL DE EDUCACAO DE CEREJEIRAS",
     "CAP": "CASA DE APOIO A SAUDE DO INDIO",
     "CAD/FROTA": "SUGESP - COORDENADORIA DE APOIO LOGISTICO E GESTAO DE FROTA",
-    "EQUIPAMENTO - SETUR/RO": "SETUR",
-    # Adicione outras correspondências que identificar na secção de ajuda no final da página
+    "Equipamento - SETUR/RO": "SETUR/RO",
+    "Equipamentos - AGEVISA/RO": "AGEVISA/RO",
+    "Equipamentos - CBM/RO": "CBM/RO",
+    "Equipamentos - DETRAN/RO": "DETRAN/RO",
+    "Equipamentos - FEASE/RO": "FEASE/RO",
+    "Equipamentos - FEPRAM/RO": "FEPRAM/RO",
+    "Equipamentos - IDARON / RO": "IDARON / RO",
+    "Equipamentos - IDEP/RO": "IDEP/RO",
+    "Equipamentos - PM/RO": "PM/RO",
+    "Equipamentos - SEDAM/RO": "SEDAM/RO",
+    "Equipamentos - SEDUC/RO": "SEDUC/RO",
+    "Equipamentos - SEJUCEL / RO": "SEJUCEL / RO",
+    "Equipamentos - SEJUS/RO": "SEJUS/RO",
+    "Equipamentos - SEOSP/RO": "SEOSP/RO",
+    "Equipamentos - SESAU": "SESAU/RO",
+    "Equipamentos - SESDEC/RO": "SESDEC / RO",
+    "Equipamentos - SOPH/RO": "SOPH/RO",
+    "Veículos - AGERO/RO": "AGERO/RO",
+    "Veículos - AGEVISA/RO": "AGEVISA/RO",
+    "Veículos - CBM/RO": "CBM/RO",
+    "Veículos - CMR/RO": "CMR/RO",
+    "Veículos - DETRAN/RO": "DETRAN/RO",
+    "Veículos - FEASE/RO": "FEASE/RO",
+    "Veículos - FEPRAM/RO": "FEPRAM/RO",
+    "Veículos - IDARON/RO": "IDARON / RO",
+    "Veículos - IDEP/RO": "IDEP/RO",
+    "Veículos - IESPRO/RO": "IESPRO/RO",
+    "Veículos - IPEM/RO": "IPEM/RO",
+    "Veículos - IPERON": "IPERON/RO",
+    "Veículos - JUCER/RO": "JUCER/RO",
+    "Veículos - PM/RO": "PM/RO",
+    "Veículos - SEAGRI/RO": "SEAGRI/RO",
+    "Veículos - SEDEC/RO": "SEDEC/RO",
+    "Veículos - SEDUC/RO": "SEDUC/RO",
+    "Veículos - SEFIN/RO": "SEFIN/RO",
+    "Veículos - SEGEP/RO": "SEGEP/RO",
+    "Veículos - SEJUCEL / RO": "SEJUCEL / RO",
+    "Veículos - SEJUS/RO": "SEJUS/RO",
+    "Veículos - SEOSP/RO": "SEOSP/RO",
+    "Veículos - SEPAT/RO": "SEPAT/RO",
+    "Veículos - SESAU": "SESAU/RO",
+    "Veículos - SETIC/RO": "SETIC/RO",
+    "Veículos - SETUR/RO": "SETUR/RO",
+    "Veículos - SOPH/RO": "SOPH/RO",
 }
 
 
@@ -217,9 +261,9 @@ if st.button("🚀 Gerar Texto do Relatório", type="primary"):
                     secretaria_normalizada = normalizar_texto(secretaria_original)
                     empenho_automatico = mapa_empenhos.get(secretaria_normalizada)
                     if not empenho_automatico:
-                        nome_mapeado = MAPEAMENTO_SECRETARIAS.get(secretaria_normalizada)
-                        if nome_mapeado:
-                            empenho_automatico = mapa_empenhos.get(normalizar_texto(nome_mapeado))
+                        nome_mapeado_de_para = MAPEAMENTO_SECRETARIAS.get(secretaria_original) # Busca pelo nome original
+                        if nome_mapeado_de_para:
+                            empenho_automatico = mapa_empenhos.get(normalizar_texto(nome_mapeado_de_para))
                     if not empenho_automatico:
                         empenho_automatico = "EMPENHO NÃO ENCONTRADO"
                         if secretaria_original != "Secretaria Não Informada":
