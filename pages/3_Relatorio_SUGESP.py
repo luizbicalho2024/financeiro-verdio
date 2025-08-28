@@ -12,8 +12,8 @@ import io
 # --- 1. CONFIGURAÇÃO DA PÁGINA E AUTENTICAÇÃO ---
 st.set_page_config(
     layout="wide",
-    page_title="SUGESP Relatório de Faturamento",
-    page_icon=""
+    page_title="Gerador de Relatório de Faturamento",
+    page_icon="✍️"
 )
 
 # --- VERIFICAÇÃO DE LOGIN ---
@@ -57,7 +57,6 @@ def mapear_empenhos(dados_empenhos):
     if not dados_empenhos:
         return mapa
     for empenho in dados_empenhos:
-        # Verifica se 'grupo' e 'nome' existem para evitar erros
         if empenho.get('grupo') and empenho['grupo'].get('nome'):
             secretaria = empenho['grupo']['nome']
             numero_empenho = empenho.get('numero_empenho', 'Não encontrado')
@@ -65,25 +64,39 @@ def mapear_empenhos(dados_empenhos):
                 mapa[secretaria] = []
             mapa[secretaria].append(numero_empenho)
     
-    # Junta múltiplos empenhos em uma única string
     for secretaria, lista_empenhos in mapa.items():
         mapa[secretaria] = " / ".join(lista_empenhos)
         
     return mapa
 
-def processar_dados_para_relatorio(dados_api, nome_cliente_principal, taxa_ir_geral):
-    """Filtra e agrupa os dados por secretaria para gerar os valores do relatório."""
-    if not dados_api:
+def mapear_ir_produtos(dados_produtos):
+    """Cria um dicionário mapeando o ID do produto à sua alíquota de IR."""
+    mapa_ir = {}
+    if not dados_produtos:
+        return mapa_ir
+    for produto in dados_produtos:
+        # A API de transações usa o ID do produto para o join
+        produto_id = produto.get('id')
+        # A alíquota vem como percentual, então dividimos por 100
+        aliquota = float(produto.get('aliquota_ir', 0)) / 100.0
+        if produto_id:
+            mapa_ir[produto_id] = aliquota
+    return mapa_ir
+
+def processar_dados_para_relatorio(dados_transacoes, nome_cliente_principal, mapa_ir):
+    """Filtra e agrupa os dados por secretaria, calculando o IR com base no mapa de produtos."""
+    if not dados_transacoes:
         return None
 
-    df = pd.json_normalize(dados_api)
+    df = pd.json_normalize(dados_transacoes)
 
     df.rename(columns={
         'informacao.cliente.nome': 'Cliente',
         'informacao.search.subgrupo.nome': 'Secretaria',
         'valor_total': 'Valor Bruto',
         'valor_liquido_cliente': 'Valor Liquido',
-        'informacao.produto.nome': 'Produto'
+        'informacao.produto.nome': 'Produto',
+        'produto_id': 'ID do Produto' # Coluna necessária para o join do IR
     }, inplace=True)
     
     df_filtrado = df[df['Cliente'].str.contains(nome_cliente_principal, case=False, na=False)].copy()
@@ -92,17 +105,23 @@ def processar_dados_para_relatorio(dados_api, nome_cliente_principal, taxa_ir_ge
         return {}
 
     df_filtrado['Secretaria'] = df_filtrado['Secretaria'].fillna('Secretaria Não Informada')
-    for col in ['Valor Bruto', 'Valor Liquido']:
+    for col in ['Valor Bruto', 'Valor Liquido', 'ID do Produto']:
         df_filtrado[col] = pd.to_numeric(df_filtrado[col], errors='coerce').fillna(0)
+
+    # Calcula o IR para cada transação individualmente usando o mapa de IR
+    df_filtrado['IR Retido'] = df_filtrado.apply(
+        lambda row: row['Valor Bruto'] * mapa_ir.get(row['ID do Produto'], 0),
+        axis=1
+    )
 
     dados_agrupados = {}
     for secretaria, group in df_filtrado.groupby('Secretaria'):
         valor_bruto_total = group['Valor Bruto'].sum()
         valor_liquido_total = group['Valor Liquido'].sum()
-        ir_retido_total = valor_bruto_total * (taxa_ir_geral / 100)
+        ir_retido_total = group['IR Retido'].sum()
 
         consumo_por_produto = group.groupby('Produto')['Valor Bruto'].sum()
-        ir_por_produto = (consumo_por_produto * (taxa_ir_geral / 100)).to_dict()
+        ir_por_produto = group.groupby('Produto')['IR Retido'].sum().to_dict()
         consumo_por_produto = consumo_por_produto.to_dict()
 
         dados_agrupados[secretaria] = {
@@ -118,7 +137,7 @@ def processar_dados_para_relatorio(dados_api, nome_cliente_principal, taxa_ir_ge
 def gerar_texto_relatorio(dados_secretaria, inputs_manuais, empenho_automatico):
     """Monta a string final para uma secretaria específica."""
     consumo_str = ", ".join([f"{i+1}. {produto} R$ {valor:,.2f}" for i, (produto, valor) in enumerate(dados_secretaria['Consumo'].items())])
-    ir_item_str = "; ".join([f"{i+1} - IR R$ {valor:,.2f}" for i, (produto, valor) in enumerate(dados_secretaria['IR por Item'].items())])
+    ir_item_str = "; ".join([f"{i+1} - IR R$ {valor:,.2f}" for i, (produto, valor) in enumerate(dados_secretaria['IR por Item'].items()) if produto in dados_secretaria['Consumo']])
 
     relatorio = (
         f"(CONTRATO nº {inputs_manuais['contrato']}/PGE-SUGESP – {inputs_manuais['secretaria_nome']}) | "
@@ -140,8 +159,8 @@ def gerar_texto_relatorio(dados_secretaria, inputs_manuais, empenho_automatico):
 
 
 # --- 3. INTERFACE DA PÁGINA ---
-st.title("SUGESP Relatório de Faturamento")
-st.markdown("Gerar o texto final para faturamento a partir das informações do SIGYO.")
+st.title("✍️ Gerador de Relatório de Faturamento")
+st.markdown("Gere o texto final para faturamento a partir dos dados da API e informações manuais.")
 st.markdown("---")
 
 st.subheader("1. Consulta à API")
@@ -156,13 +175,12 @@ with col2:
     data_fim = st.date_input("🗓️ Data de Fim", value=hoje)
 
 st.markdown("---")
-st.subheader("2. Informações para o Relatório")
+st.subheader("2. Informações Manuais para o Relatório")
 col_a, col_b = st.columns(2)
 with col_a:
     contrato = st.text_input("Nº do Contrato", "1551/2024")
     periodo = st.text_input("Período", f"{data_inicio.strftime('%B/%Y')}")
     vencimento = st.date_input("Vencimento", hoje + timedelta(days=30))
-    taxa_ir_geral = st.number_input("Taxa de IR Retido Geral (%)", min_value=0.0, value=2.4, step=0.1, format="%.2f")
 
 with col_b:
     termo_contrato = st.text_input("Nº do Termo de Contrato (Objeto)", "1551 – 0055472251")
@@ -178,22 +196,26 @@ with col_d:
 with col_e:
     conta = st.text_input("C/C", "20-5")
 
-if st.button("Gerar Relatório", type="primary"):
+if st.button("🚀 Gerar Texto do Relatório", type="primary"):
     with st.spinner("Buscando e processando os dados... (Isso pode levar um momento)"):
-        # Busca dados das duas APIs
+        # Busca dados das três APIs
         endpoint_transacoes = f"transacoes?TransacaoSearch[data_cadastro]={data_inicio.strftime('%d/%m/%Y')} - {data_fim.strftime('%d/%m/%Y')}"
         dados_transacoes, erro_transacoes = buscar_dados_api(token, endpoint_transacoes)
         dados_empenhos, erro_empenhos = buscar_dados_api(token, "empenhos?expand=contrato.empresa,grupo")
+        dados_produtos, erro_produtos = buscar_dados_api(token, "produtos?expand=categoria")
 
-        # Verifica erros
+        # Verifica erros em cascata
         if erro_transacoes:
             st.error(erro_transacoes)
         elif erro_empenhos:
             st.error(erro_empenhos)
+        elif erro_produtos:
+            st.error(erro_produtos)
         else:
             # Processa os dados
             mapa_empenhos = mapear_empenhos(dados_empenhos)
-            dados_agrupados = processar_dados_para_relatorio(dados_transacoes, nome_cliente, taxa_ir_geral)
+            mapa_ir = mapear_ir_produtos(dados_produtos)
+            dados_agrupados = processar_dados_para_relatorio(dados_transacoes, nome_cliente, mapa_ir)
             
             if not dados_agrupados:
                 st.warning(f"Nenhuma transação encontrada para o cliente '{nome_cliente}' no período selecionado.")
@@ -204,20 +226,14 @@ if st.button("Gerar Relatório", type="primary"):
 
                 texto_final_completo = ""
                 
-                for secretaria, dados in dados_agrupados.items():
-                    # Pega o empenho do mapa, ou usa um valor padrão se não encontrar
+                for secretaria, dados in sorted(dados_agrupados.items()):
                     empenho_automatico = mapa_empenhos.get(secretaria, "EMPENHO NÃO ENCONTRADO")
                     
                     inputs_manuais = {
-                        "contrato": contrato,
-                        "secretaria_nome": secretaria,
-                        "periodo": periodo,
-                        "vencimento": vencimento.strftime('%d/%m/%Y'),
-                        "banco": banco,
-                        "agencia": agencia,
-                        "conta": conta,
-                        "cnpj": cnpj,
-                        "nome_empresa": nome_empresa,
+                        "contrato": contrato, "secretaria_nome": secretaria,
+                        "periodo": periodo, "vencimento": vencimento.strftime('%d/%m/%Y'),
+                        "banco": banco, "agencia": agencia, "conta": conta,
+                        "cnpj": cnpj, "nome_empresa": nome_empresa,
                         "termo_contrato": termo_contrato,
                     }
                     
