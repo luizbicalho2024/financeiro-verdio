@@ -1,5 +1,6 @@
 # auth_functions.py
 import streamlit as st
+from firebase_admin import auth
 from firebase_config import db, get_auth_admin_client
 
 # Obtém o cliente de autenticação do Admin SDK
@@ -40,10 +41,14 @@ def create_new_user(email, password, role):
             'email': email,
             'role': role
         })
-        st.success(f"Usuário '{email}' criado com sucesso!")
         return True
     except Exception as e:
-        st.error(f"Erro ao criar usuário: {e}")
+        # Adiciona tratamento específico para o erro de JWT
+        if 'invalid_grant' in str(e) or 'JWT' in str(e):
+             st.error("🚨 Erro de Autenticação (Invalid JWT Signature).")
+             st.warning("Isso indica que as credenciais da 'service_account' nos Secrets do Streamlit estão incorretas ou desatualizadas. Por favor, gere uma nova chave privada no Firebase e atualize o secret.")
+        else:
+            st.error(f"Erro ao criar usuário: {e}")
         return False
 
 def update_user_status(uid, is_disabled):
