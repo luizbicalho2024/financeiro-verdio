@@ -12,8 +12,8 @@ import io
 # --- 1. CONFIGURAÇÃO DA PÁGINA E AUTENTICAÇÃO ---
 st.set_page_config(
     layout="wide",
-    page_title="Gerador de Relatório de Faturamento",
-    page_icon="✍️"
+    page_title="SUGESP Relatório de Faturamento",
+    page_icon=""
 )
 
 # --- VERIFICAÇÃO DE LOGIN ---
@@ -140,8 +140,8 @@ def gerar_texto_relatorio(dados_secretaria, inputs_manuais, empenho_automatico):
 
 
 # --- 3. INTERFACE DA PÁGINA ---
-st.title("✍️ Gerador de Relatório de Faturamento")
-st.markdown("Gere o texto final para faturamento a partir dos dados da API e informações manuais.")
+st.title("SUGESP Relatório de Faturamento")
+st.markdown("Gerar o texto final para faturamento a partir das informações do SIGYO.")
 st.markdown("---")
 
 st.subheader("1. Consulta à API")
@@ -156,7 +156,7 @@ with col2:
     data_fim = st.date_input("🗓️ Data de Fim", value=hoje)
 
 st.markdown("---")
-st.subheader("2. Informações Manuais para o Relatório")
+st.subheader("2. Informações para o Relatório")
 col_a, col_b = st.columns(2)
 with col_a:
     contrato = st.text_input("Nº do Contrato", "1551/2024")
@@ -178,7 +178,7 @@ with col_d:
 with col_e:
     conta = st.text_input("C/C", "20-5")
 
-if st.button("🚀 Gerar Texto do Relatório", type="primary"):
+if st.button("Gerar Relatório", type="primary"):
     with st.spinner("Buscando e processando os dados... (Isso pode levar um momento)"):
         # Busca dados das duas APIs
         endpoint_transacoes = f"transacoes?TransacaoSearch[data_cadastro]={data_inicio.strftime('%d/%m/%Y')} - {data_fim.strftime('%d/%m/%Y')}"
