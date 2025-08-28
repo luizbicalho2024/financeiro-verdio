@@ -41,8 +41,7 @@ MAPEAMENTO_SECRETARIAS = {
     "EMATER": "EMATER-RO",
     "VEICULOS - REGIONAIS": "SUGESP - COORDENADORIA DE APOIO LOGISTICO E GESTAO DE FROTA",
     "VEICULOS - SUGESP": "SUGESP - COORDENADORIA DE APOIO LOGISTICO E GESTAO DE FROTA",
-    # Adicione outras correspondências aqui conforme necessário
-    # Ex: "SRE/JARU": "NOME COMPLETO DA SRE JARU NA API DE EMPENHOS",
+    # Adicione outras correspondências que identificar na secção de ajuda no final da página
 }
 
 
