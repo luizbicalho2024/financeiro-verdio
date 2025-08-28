@@ -1,48 +1,38 @@
-# criar_admin.py
 import streamlit as st
 import firebase_admin
 from firebase_admin import credentials, auth, firestore
 
-st.set_page_config(page_title="Criar Admin", page_icon="👤")
-
-st.title("👤 Criar Primeiro Usuário Admin")
-
-# Inicializar Firebase com st.secrets
+# Inicializar Firebase apenas uma vez
 if not firebase_admin._apps:
-    try:
-        cred = credentials.Certificate(dict(st.secrets["firebase"]))
-        firebase_admin.initialize_app(cred)
-        db = firestore.client()
-    except Exception as e:
-        st.error(f"Erro ao inicializar Firebase: {e}")
-        st.stop()
+    cred = credentials.Certificate(dict(st.secrets["firebase_service_account"]))
+    firebase_admin.initialize_app(cred)
+    db = firestore.client()
 
-# Formulário de criação de Admin
-with st.form("form_admin"):
-    email = st.text_input("Email do Admin")
-    senha = st.text_input("Senha", type="password")
-    nome = st.text_input("Nome completo")
-    submitted = st.form_submit_button("Criar Admin")
+st.title("🔑 Criar primeiro usuário Admin")
 
-if submitted:
-    if not email or not senha or not nome:
-        st.warning("⚠️ Preencha todos os campos!")
+with st.form("create_admin_form"):
+    email = st.text_input("E-mail do Admin")
+    password = st.text_input("Senha", type="password")
+    submit = st.form_submit_button("Criar Admin")
+
+if submit:
+    if not email or not password:
+        st.error("Preencha todos os campos.")
     else:
         try:
-            # Criar usuário no Firebase Auth
+            # Criar usuário no Firebase Authentication
             user = auth.create_user(
                 email=email,
-                password=senha,
-                display_name=nome
+                password=password,
+                disabled=False
             )
 
-            # Salvar no Firestore com role=admin
-            db.collection("usuarios").document(user.uid).set({
-                "nome": nome,
+            # Salvar no Firestore com role=Admin
+            db.collection("users").document(user.uid).set({
                 "email": email,
-                "role": "admin"
+                "role": "Admin"
             })
 
-            st.success(f"✅ Usuário admin criado com sucesso: {email}")
+            st.success(f"✅ Admin {email} criado com sucesso!")
         except Exception as e:
             st.error(f"Erro ao criar Admin: {e}")
