@@ -7,3 +7,4 @@ fpdf
 bcrypt
 setuptools
 streamlit-authenticator
+requests
