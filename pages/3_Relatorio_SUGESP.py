@@ -8,16 +8,8 @@ import pandas as pd
 import requests
 from datetime import datetime, timedelta
 import io
-import locale # <--- 1. BIBLIOTECA DE LOCALIZAÇÃO IMPORTADA
 
-# --- 2. DEFINE O IDIOMA PARA PORTUGUÊS DO BRASIL ---
-try:
-    locale.setlocale(locale.LC_TIME, 'pt_BR.UTF-8')
-except locale.Error:
-    st.warning("Local 'pt_BR.UTF-8' não encontrado. O mês pode aparecer em inglês.")
-
-
-# --- CONFIGURAÇÃO DA PÁGINA E AUTENTICAÇÃO ---
+# --- 1. CONFIGURAÇÃO DA PÁGINA E AUTENTICAÇÃO ---
 st.set_page_config(
     layout="wide",
     page_title="Gerador de Relatório de Faturamento",
@@ -39,7 +31,7 @@ if st.sidebar.button("Logout"):
     st.switch_page("1_Home.py")
 
 
-# --- FUNÇÕES DE LÓGICA ---
+# --- 2. FUNÇÕES DE LÓGICA ---
 
 @st.cache_data(ttl=600)
 def buscar_dados_api(token, endpoint):
@@ -163,7 +155,7 @@ def gerar_texto_relatorio(dados_secretaria, inputs_manuais, empenho_automatico):
     return relatorio
 
 
-# --- INTERFACE DA PÁGINA ---
+# --- 3. INTERFACE DA PÁGINA ---
 st.title("✍️ Gerador de Relatório de Faturamento")
 st.markdown("Gere o texto final para faturamento a partir dos dados da API e informações manuais.")
 st.markdown("---")
@@ -181,11 +173,21 @@ with col2:
 
 st.markdown("---")
 st.subheader("2. Informações Manuais para o Relatório")
+
+# Dicionário para traduzir o mês para português
+meses_em_portugues = {
+    1: "Janeiro", 2: "Fevereiro", 3: "Março", 4: "Abril",
+    5: "Maio", 6: "Junho", 7: "Julho", 8: "Agosto",
+    9: "Setembro", 10: "Outubro", 11: "Novembro", 12: "Dezembro"
+}
+# Formata o período usando o dicionário
+nome_mes = meses_em_portugues.get(data_inicio.month, "")
+periodo_formatado = f"{nome_mes.capitalize()}/{data_inicio.year}"
+
 col_a, col_b = st.columns(2)
 with col_a:
     contrato = st.text_input("Nº do Contrato", "1551/2024")
-    # Agora usa strftime com o locale em português
-    periodo = st.text_input("Período", f"{data_inicio.strftime('%B/%Y').capitalize()}")
+    periodo = st.text_input("Período", value=periodo_formatado)
     vencimento = st.date_input("Vencimento", hoje + timedelta(days=30))
 
 with col_b:
