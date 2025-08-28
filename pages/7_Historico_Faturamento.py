@@ -1,4 +1,10 @@
 # pages/7_Historico_Faturamento.py
+import sys
+import os
+
+# Adiciona o diretório raiz do projeto ao sys.path para resolver o ImportError
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 import streamlit as st
 import pandas as pd
 import user_management_db as umdb
@@ -32,7 +38,6 @@ if not history_data:
     st.stop()
 
 df = pd.DataFrame(history_data)
-# Converte o timestamp do Firebase para datetime
 df['data_geracao'] = pd.to_datetime(df['data_geracao'])
 df['mes_ano'] = df['data_geracao'].dt.to_period('M').astype(str)
 
