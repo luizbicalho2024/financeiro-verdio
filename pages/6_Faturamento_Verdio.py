@@ -198,7 +198,7 @@ try:
     st.image("imgs/logo.png", width=250)
 except: pass
 
-st.markdown("<h1 style='text-align: center; color: #006494;'>💲 Assistente de Faturamento</h1>", unsafe_allow_html=True)
+st.markdown("<h1 style='text-align: center; color: #006494;'>Verdio Assistente de Faturamento</h1>", unsafe_allow_html=True)
 st.markdown("---")
 
 # --- 4. INPUTS DE CONFIGURAÇÃO ---
