@@ -7,16 +7,15 @@ st.set_page_config(page_title="Login", page_icon="🔑", layout="centered")
 st.title("🔑 Sistema de Login Verdio")
 
 # --- Lógica de Login ---
-# Se o usuário já estiver logado, mostra mensagem e botão de logout
 if 'user_info' in st.session_state:
     user_email = st.session_state['user_info']['email']
     st.success(f"Login realizado com sucesso como **{user_email}**.")
     st.info(f"Nível de acesso: **{st.session_state.get('role', 'Usuário')}**")
     
     if st.button("Logout"):
-        del st.session_state['user_info']
-        if 'role' in st.session_state:
-            del st.session_state['role']
+        # Limpa todas as chaves da sessão para um logout completo
+        for key in list(st.session_state.keys()):
+            del st.session_state[key]
         st.rerun()
     st.stop()
 
@@ -31,20 +30,20 @@ with st.form("login_form"):
             st.error("Por favor, preencha todos os campos.")
         else:
             try:
-                # Tenta fazer login com e-mail e senha
                 user = auth_client.sign_in_with_email_and_password(email, password)
-                st.session_state['user_info'] = user # Salva informações do usuário na sessão
+                st.session_state['user_info'] = user
                 
-                # Após o login, busca a "role" do usuário no Firestore
                 uid = user['localId']
                 user_doc = db.collection('users').document(uid).get()
 
                 if user_doc.exists:
                     st.session_state['role'] = user_doc.to_dict().get('role', 'Usuário')
                 else:
-                    st.session_state['role'] = 'Usuário' # Role padrão se não encontrar
+                    st.session_state['role'] = 'Usuário'
+
+                # Adiciona o nome do usuário à sessão para ser usado nas outras páginas
+                st.session_state['name'] = user['email'].split('@')[0].capitalize()
                 
-                # Força o recarregamento da página para refletir o estado de login
                 st.rerun()
 
             except Exception as e:
