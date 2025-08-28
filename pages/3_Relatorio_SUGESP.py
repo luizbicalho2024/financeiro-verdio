@@ -76,8 +76,6 @@ def mapear_ir_produtos(dados_produtos):
         return mapa_ir
     for produto in dados_produtos:
         produto_id = produto.get('id')
-        # --- CORREÇÃO AQUI ---
-        # Verifica se 'aliquota_ir' não é nula antes de converter
         raw_aliquota = produto.get('aliquota_ir')
         aliquota = float(raw_aliquota) / 100.0 if raw_aliquota is not None else 0.0
         
@@ -230,9 +228,10 @@ if st.button("🚀 Gerar Texto do Relatório", type="primary"):
                 st.success(f"Dados processados! {len(dados_agrupados)} secretarias encontradas.")
                 st.markdown("---")
                 st.subheader("3. Resultado Final")
+                st.info("Clique no ícone no canto superior direito de cada bloco para copiar o texto.")
 
-                texto_final_completo = ""
-                
+                # --- MUDANÇA AQUI ---
+                # Em vez de uma única caixa de texto, gera um bloco de código para cada secretaria
                 for secretaria, dados in sorted(dados_agrupados.items()):
                     empenho_automatico = mapa_empenhos.get(secretaria, "EMPENHO NÃO ENCONTRADO")
                     
@@ -245,11 +244,7 @@ if st.button("🚀 Gerar Texto do Relatório", type="primary"):
                     }
                     
                     texto_gerado = gerar_texto_relatorio(dados, inputs_manuais, empenho_automatico)
-                    texto_final_completo += texto_gerado + "\n\n"
-
-                if texto_final_completo:
-                    st.text_area(
-                        "Texto Consolidado (pronto para copiar)", 
-                        value=texto_final_completo.strip(), 
-                        height=500
-                    )
+                    
+                    # Exibe o título da secretaria e o bloco de código
+                    st.markdown(f"#### {secretaria}")
+                    st.code(texto_gerado, language=None)
