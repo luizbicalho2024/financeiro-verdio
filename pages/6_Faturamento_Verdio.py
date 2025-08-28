@@ -13,8 +13,8 @@ from fpdf import FPDF
 # --- 1. CONFIGURAÇÃO E AUTENTICAÇÃO ---
 st.set_page_config(
     layout="wide",
-    page_title="Assistente de Faturamento",
-    page_icon="Verdio"
+    page_title="Verdio Faturamento",
+    page_icon="imgs/v-c.png"
 )
 
 # --- VERIFICAÇÃO DE LOGIN ---
