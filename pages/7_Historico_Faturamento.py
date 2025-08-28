@@ -1,33 +1,29 @@
 # pages/7_Historico_Faturamento.py
 import sys
 import os
-
-# Adiciona o diretório raiz do projeto ao sys.path para resolver o ImportError
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 import streamlit as st
 import pandas as pd
 import user_management_db as umdb
 
-st.set_page_config(
-    layout="wide",
-    page_title="Histórico de Faturamento",
-    page_icon="🧾"
-)
+st.set_page_config(layout="wide", page_title="Histórico de Faturamento", page_icon="🧾")
 
-if not st.session_state.get("authentication_status"):
+# --- VERIFICAÇÃO DE LOGIN (CORRIGIDO) ---
+if "user_info" not in st.session_state:
     st.error("🔒 Acesso Negado! Por favor, faça login para visualizar esta página.")
     st.stop()
 
-# --- BARRA LATERAL ---
+# --- BARRA LATERAL PADRONIZADA ---
 st.sidebar.image("imgs/v-c.png", width=120)
 st.sidebar.title(f"Olá, {st.session_state.get('name', 'N/A')}! 👋")
 st.sidebar.markdown("---")
 if st.sidebar.button("Logout"):
     for key in list(st.session_state.keys()):
         del st.session_state[key]
-    st.rerun()
+    st.switch_page("1_Home.py")
 
+# --- Conteúdo da Página (sem alterações) ---
 st.title("🧾 Histórico de Faturamento")
 st.markdown("Análise dos relatórios de faturamento gerados e salvos na plataforma.")
 
@@ -52,7 +48,7 @@ with st.expander("Ver todos os registros de faturamento", expanded=True):
         use_container_width=True,
         hide_index=True,
         column_config={
-            "_id": None, # Esconde a coluna de ID
+            "_id": None,
             "data_geracao": st.column_config.DatetimeColumn("Data de Geração", format="DD/MM/YYYY HH:mm"),
             "cliente": "Cliente",
             "periodo_relatorio": "Período do Relatório",
@@ -63,8 +59,7 @@ with st.expander("Ver todos os registros de faturamento", expanded=True):
         }
     )
 
-# --- Seção de Exclusão para Admins ---
-if st.session_state.get("role") == "Admin":
+if st.session_state.get("role", "Usuário").lower() == "admin":
     st.markdown("---")
     st.subheader("🗑️ Gerenciar Histórico")
     
