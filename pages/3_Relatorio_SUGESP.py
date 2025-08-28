@@ -7,7 +7,7 @@ import streamlit as st
 import pandas as pd
 import requests
 from datetime import datetime, timedelta
-import io
+import unicodedata
 
 # --- 1. CONFIGURAÇÃO DA PÁGINA E AUTENTICAÇÃO ---
 st.set_page_config(
@@ -33,6 +33,19 @@ if st.sidebar.button("Logout"):
 
 # --- 2. FUNÇÕES DE LÓGICA ---
 
+def normalizar_texto(texto):
+    """
+    Remove acentos, converte para maiúsculas e remove caracteres especiais
+    para uma comparação mais robusta.
+    """
+    if not isinstance(texto, str):
+        return ""
+    # Remove acentos
+    nfkd_form = unicodedata.normalize('NFKD', texto)
+    texto_sem_acentos = "".join([c for c in nfkd_form if not unicodedata.combining(c)])
+    # Deixa apenas letras e números e converte para maiúsculas
+    return "".join(filter(str.isalnum, texto_sem_acentos)).upper()
+
 @st.cache_data(ttl=600)
 def buscar_dados_api(token, endpoint):
     """Função genérica para buscar dados de um endpoint da API."""
@@ -43,7 +56,7 @@ def buscar_dados_api(token, endpoint):
     url = f"https://sigyo.uzzipay.com/api/{endpoint}"
     
     try:
-        response = requests.get(url, headers=headers, timeout=30)
+        response = requests.get(url, headers=headers, timeout=45)
         response.raise_for_status()
         return response.json(), None
     except requests.exceptions.HTTPError as err:
@@ -52,39 +65,29 @@ def buscar_dados_api(token, endpoint):
         return None, f"Erro de conexão com o endpoint '{endpoint}': {e}"
 
 def mapear_empenhos(dados_empenhos):
-    """Cria um dicionário mapeando o nome da secretaria ao seu número de empenho."""
+    """Cria um dicionário mapeando o nome NORMALIZADO da secretaria ao seu número de empenho."""
     mapa = {}
     if not dados_empenhos:
         return mapa
     for empenho in dados_empenhos:
         if empenho.get('grupo') and empenho['grupo'].get('nome'):
-            secretaria = empenho['grupo']['nome']
+            secretaria_original = empenho['grupo']['nome']
+            secretaria_normalizada = normalizar_texto(secretaria_original)
             numero_empenho = empenho.get('numero_empenho', 'Não encontrado')
-            if secretaria not in mapa:
-                mapa[secretaria] = []
-            mapa[secretaria].append(numero_empenho)
+            
+            if secretaria_normalizada not in mapa:
+                mapa[secretaria_normalizada] = []
+            mapa[secretaria_normalizada].append(numero_empenho)
     
     for secretaria, lista_empenhos in mapa.items():
         mapa[secretaria] = " / ".join(lista_empenhos)
         
     return mapa
 
-def mapear_ir_produtos(dados_produtos):
-    """Cria um dicionário mapeando o ID do produto à sua alíquota de IR."""
-    mapa_ir = {}
-    if not dados_produtos:
-        return mapa_ir
-    for produto in dados_produtos:
-        produto_id = produto.get('id')
-        raw_aliquota = produto.get('aliquota_ir')
-        aliquota = float(raw_aliquota) / 100.0 if raw_aliquota is not None else 0.0
-        
-        if produto_id:
-            mapa_ir[produto_id] = aliquota
-    return mapa_ir
-
-def processar_dados_para_relatorio(dados_transacoes, nome_cliente_principal, mapa_ir):
-    """Filtra e agrupa os dados por secretaria, calculando o IR com base no mapa de produtos."""
+def processar_dados_para_relatorio(dados_transacoes, nome_cliente_principal):
+    """
+    Filtra e agrupa os dados por secretaria, usando os valores diretamente da API de transações.
+    """
     if not dados_transacoes:
         return None
 
@@ -96,7 +99,8 @@ def processar_dados_para_relatorio(dados_transacoes, nome_cliente_principal, map
         'valor_total': 'Valor Bruto',
         'valor_liquido_cliente': 'Valor Liquido',
         'informacao.produto.nome': 'Produto',
-        'produto_id': 'ID do Produto'
+        'imposto_renda': 'IR Retido',
+        'valor_taxa_cliente': 'Taxa Negativa'
     }, inplace=True)
     
     df_filtrado = df[df['Cliente'].str.contains(nome_cliente_principal, case=False, na=False)].copy()
@@ -105,31 +109,18 @@ def processar_dados_para_relatorio(dados_transacoes, nome_cliente_principal, map
         return {}
 
     df_filtrado['Secretaria'] = df_filtrado['Secretaria'].fillna('Secretaria Não Informada')
-    for col in ['Valor Bruto', 'Valor Liquido', 'ID do Produto']:
+    for col in ['Valor Bruto', 'Valor Liquido', 'IR Retido', 'Taxa Negativa']:
         df_filtrado[col] = pd.to_numeric(df_filtrado[col], errors='coerce').fillna(0)
-
-    df_filtrado['IR Retido'] = df_filtrado.apply(
-        lambda row: row['Valor Bruto'] * mapa_ir.get(row['ID do Produto'], 0),
-        axis=1
-    )
 
     dados_agrupados = {}
     for secretaria, group in df_filtrado.groupby('Secretaria'):
-        valor_bruto_total = group['Valor Bruto'].sum()
-        valor_liquido_total = group['Valor Liquido'].sum()
-        ir_retido_total = group['IR Retido'].sum()
-
-        consumo_por_produto = group.groupby('Produto')['Valor Bruto'].sum()
-        ir_por_produto = group.groupby('Produto')['IR Retido'].sum().to_dict()
-        consumo_por_produto = consumo_por_produto.to_dict()
-
         dados_agrupados[secretaria] = {
-            'Valor Bruto': valor_bruto_total,
-            'Valor Liquido': valor_liquido_total,
-            'Taxa Negativa': valor_bruto_total - valor_liquido_total,
-            'IR Retido': ir_retido_total,
-            'Consumo': consumo_por_produto,
-            'IR por Item': ir_por_produto
+            'Valor Bruto': group['Valor Bruto'].sum(),
+            'Valor Liquido': group['Valor Liquido'].sum(),
+            'Taxa Negativa': group['Taxa Negativa'].sum(),
+            'IR Retido': group['IR Retido'].sum(),
+            'Consumo': group.groupby('Produto')['Valor Bruto'].sum().to_dict(),
+            'IR por Item': group.groupby('Produto')['IR Retido'].sum().to_dict()
         }
     return dados_agrupados
 
@@ -209,18 +200,14 @@ if st.button("🚀 Gerar Texto do Relatório", type="primary"):
         endpoint_transacoes = f"transacoes?TransacaoSearch[data_cadastro]={data_inicio.strftime('%d/%m/%Y')} - {data_fim.strftime('%d/%m/%Y')}"
         dados_transacoes, erro_transacoes = buscar_dados_api(token, endpoint_transacoes)
         dados_empenhos, erro_empenhos = buscar_dados_api(token, "empenhos?expand=contrato.empresa,grupo")
-        dados_produtos, erro_produtos = buscar_dados_api(token, "produtos?expand=categoria")
 
         if erro_transacoes:
             st.error(erro_transacoes)
         elif erro_empenhos:
             st.error(erro_empenhos)
-        elif erro_produtos:
-            st.error(erro_produtos)
         else:
             mapa_empenhos = mapear_empenhos(dados_empenhos)
-            mapa_ir = mapear_ir_produtos(dados_produtos)
-            dados_agrupados = processar_dados_para_relatorio(dados_transacoes, nome_cliente, mapa_ir)
+            dados_agrupados = processar_dados_para_relatorio(dados_transacoes, nome_cliente)
             
             if not dados_agrupados:
                 st.warning(f"Nenhuma transação encontrada para o cliente '{nome_cliente}' no período selecionado.")
@@ -229,11 +216,12 @@ if st.button("🚀 Gerar Texto do Relatório", type="primary"):
                 st.markdown("---")
                 st.subheader("3. Resultado Final")
 
-                for secretaria, dados in sorted(dados_agrupados.items()):
-                    empenho_automatico = mapa_empenhos.get(secretaria, "EMPENHO NÃO ENCONTRADO")
+                for secretaria_original, dados in sorted(dados_agrupados.items()):
+                    secretaria_normalizada = normalizar_texto(secretaria_original)
+                    empenho_automatico = mapa_empenhos.get(secretaria_normalizada, "EMPENHO NÃO ENCONTRADO")
                     
                     inputs_manuais = {
-                        "contrato": contrato, "secretaria_nome": secretaria,
+                        "contrato": contrato, "secretaria_nome": secretaria_original,
                         "periodo": periodo, "vencimento": vencimento.strftime('%d/%m/%Y'),
                         "banco": banco, "agencia": agencia, "conta": conta,
                         "cnpj": cnpj, "nome_empresa": nome_empresa,
@@ -242,9 +230,7 @@ if st.button("🚀 Gerar Texto do Relatório", type="primary"):
                     
                     texto_gerado = gerar_texto_relatorio(dados, inputs_manuais, empenho_automatico)
                     
-                    st.markdown(f"#### {secretaria}")
-                    # --- MUDANÇA AQUI ---
-                    # Usa st.warning se o empenho não for encontrado, senão, usa st.code
+                    st.markdown(f"#### {secretaria_original}")
                     if empenho_automatico == "EMPENHO NÃO ENCONTRADO":
                         st.warning(texto_gerado)
                     else:
