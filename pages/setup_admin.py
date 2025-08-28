@@ -1,32 +1,48 @@
+# criar_admin.py
 import streamlit as st
-from firebase_config import auth_client, db
+import firebase_admin
+from firebase_admin import credentials, auth, firestore
 
-st.set_page_config(page_title="Setup Admin", page_icon="⚙️", layout="centered")
+st.set_page_config(page_title="Criar Admin", page_icon="👤")
 
-st.title("⚙️ Configuração Inicial - Criar Admin")
+st.title("👤 Criar Primeiro Usuário Admin")
 
-st.warning("⚠️ Esta página é temporária e deve ser removida após criar o primeiro usuário Admin.")
-
-email = st.text_input("E-mail do Admin")
-password = st.text_input("Senha do Admin", type="password")
-
-if st.button("Criar Admin"):
+# Inicializar Firebase com st.secrets
+if not firebase_admin._apps:
     try:
-        if "@" not in email or "." not in email:
-            st.error("⚠️ E-mail inválido.")
-        else:
-            # Cria no Firebase Authentication
-            user = auth_client.create_user_with_email_and_password(email, password)
+        cred = credentials.Certificate(dict(st.secrets["firebase"]))
+        firebase_admin.initialize_app(cred)
+        db = firestore.client()
+    except Exception as e:
+        st.error(f"Erro ao inicializar Firebase: {e}")
+        st.stop()
 
-            # Salva no Firestore
-            db.collection("usuarios").document(email).set({
+# Formulário de criação de Admin
+with st.form("form_admin"):
+    email = st.text_input("Email do Admin")
+    senha = st.text_input("Senha", type="password")
+    nome = st.text_input("Nome completo")
+    submitted = st.form_submit_button("Criar Admin")
+
+if submitted:
+    if not email or not senha or not nome:
+        st.warning("⚠️ Preencha todos os campos!")
+    else:
+        try:
+            # Criar usuário no Firebase Auth
+            user = auth.create_user(
+                email=email,
+                password=senha,
+                display_name=nome
+            )
+
+            # Salvar no Firestore com role=admin
+            db.collection("usuarios").document(user.uid).set({
+                "nome": nome,
                 "email": email,
-                "role": "Admin",
-                "ativo": True
+                "role": "admin"
             })
 
-            st.success(f"✅ Usuário Admin {email} criado com sucesso!")
-            st.info("Agora você já pode acessar o sistema pelo login normal.")
-
-    except Exception as e:
-        st.error(f"Erro ao criar Admin: {e}")
+            st.success(f"✅ Usuário admin criado com sucesso: {email}")
+        except Exception as e:
+            st.error(f"Erro ao criar Admin: {e}")
