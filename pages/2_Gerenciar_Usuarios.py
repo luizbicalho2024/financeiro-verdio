@@ -1,74 +1,95 @@
+# pages/2_Gerenciar_Usuarios.py
 import streamlit as st
-from firebase_config import db, auth_client
+import pandas as pd
+from auth_functions import get_all_users, create_new_user, update_user_status, update_user_role
 
 st.set_page_config(page_title="Gestão de Usuários", page_icon="👥", layout="wide")
 
-# Verifica login
-if "email" not in st.session_state:
-    st.warning("⚠️ Você precisa fazer login primeiro!")
+# --- Verificação de Login e Permissão ---
+if not st.session_state.get("authentication_status"):
+    st.error("🔒 Acesso Negado! Por favor, faça login para visualizar esta página.")
     st.stop()
 
+if st.session_state.get("role") != "Admin":
+    st.error("🚫 Você não tem permissão para acessar esta página. Apenas Administradores.")
+    st.stop()
+
+# --- Barra Lateral ---
+st.sidebar.image("imgs/v-c.png", width=120)
+st.sidebar.title(f"Olá, {st.session_state.get('name', 'N/A')}! 👋")
+st.sidebar.markdown("---")
+if st.sidebar.button("Logout"):
+    for key in list(st.session_state.keys()):
+        del st.session_state[key]
+    st.rerun()
+
+# --- Conteúdo da Página ---
 st.title("👥 Gestão de Usuários")
+st.markdown("Crie, visualize e gerencie os usuários da plataforma.")
 
-# Info usuário logado
-st.sidebar.write(f"📧 Usuário logado: {st.session_state['email']}")
-st.sidebar.write(f"🔑 Nível: {st.session_state['role']}")
+# --- Formulário de Criação ---
+with st.expander("➕ Cadastrar Novo Usuário", expanded=False):
+    with st.form("novo_usuario_form", clear_on_submit=True):
+        novo_email = st.text_input("E-mail do novo usuário")
+        senha = st.text_input("Senha", type="password")
+        role = st.selectbox("Nível de Acesso", ["Usuário", "Admin"], index=0)
+        submit_button = st.form_submit_button("Criar Usuário")
 
-# Se não for admin, bloqueia acesso
-if st.session_state["role"] != "Admin":
-    st.error("❌ Você não tem permissão para acessar esta página.")
-    st.stop()
-
-# --- Formulário de criação ---
-st.subheader("Cadastrar Novo Usuário")
-
-with st.form("novo_usuario"):
-    novo_email = st.text_input("E-mail do novo usuário")
-    senha = st.text_input("Senha", type="password")
-    role = st.selectbox("Nível de Acesso", ["Usuário", "Admin"])
-    submit = st.form_submit_button("Criar Usuário")
-
-    if submit:
-        try:
-            if "@" not in novo_email or "." not in novo_email:
-                st.error("⚠️ E-mail inválido.")
+        if submit_button:
+            if not novo_email or not senha:
+                st.warning("Por favor, preencha todos os campos.")
+            elif "@" not in novo_email or "." not in novo_email:
+                st.error("E-mail inválido.")
             else:
-                # Cria no Firebase Auth
-                user = auth_client.create_user_with_email_and_password(novo_email, senha)
+                if create_new_user(novo_email, senha, role):
+                    st.rerun()
 
-                # Salva no Firestore
-                db.collection("usuarios").document(novo_email).set({
-                    "email": novo_email,
-                    "role": role,
-                    "ativo": True
-                })
+st.markdown("---")
 
-                st.success(f"✅ Usuário {novo_email} criado com sucesso!")
-                st.rerun()
+# --- Lista de Usuários ---
+st.subheader("Lista de Usuários Cadastrados")
 
-        except Exception as e:
-            st.error(f"Erro ao criar usuário: {e}")
-
-st.divider()
-
-# --- Lista de usuários ---
-st.subheader("Lista de Usuários")
-
-usuarios = db.collection("usuarios").stream()
-for user in usuarios:
-    u = user.to_dict()
-    col1, col2, col3, col4 = st.columns([3,2,2,2])
-    col1.write(u["email"])
-    col2.write(u["role"])
-    col3.write("Ativo ✅" if u.get("ativo", True) else "Inativo ❌")
-
-    if u.get("ativo", True):
-        if col4.button("Desabilitar", key=u["email"]):
-            db.collection("usuarios").document(u["email"]).update({"ativo": False})
-            st.success(f"Usuário {u['email']} desabilitado!")
-            st.rerun()
+try:
+    users_list = get_all_users()
+    if not users_list:
+        st.info("Nenhum usuário encontrado.")
     else:
-        if col4.button("Reativar", key=u["email"]):
-            db.collection("usuarios").document(u["email"]).update({"ativo": True})
-            st.success(f"Usuário {u['email']} reativado!")
-            st.rerun()
+        df_users = pd.DataFrame(users_list)
+        
+        # Container para cada usuário
+        for index, row in df_users.iterrows():
+            st.markdown(f"**E-mail:** {row['email']}")
+            
+            col1, col2, col3 = st.columns([2, 2, 1])
+            
+            with col1:
+                new_role = st.selectbox(
+                    "Nível",
+                    ["Usuário", "Admin"],
+                    index=["Usuário", "Admin"].index(row['role']),
+                    key=f"role_{row['uid']}"
+                )
+                if new_role != row['role']:
+                    if update_user_role(row['uid'], new_role):
+                        st.rerun()
+
+            with col2:
+                if row['disabled']:
+                    if st.button("✅ Reativar Usuário", key=f"enable_{row['uid']}"):
+                        update_user_status(row['uid'], is_disabled=False)
+                        st.rerun()
+                else:
+                    if st.button("❌ Desabilitar Usuário", key=f"disable_{row['uid']}", type="primary"):
+                        if row['email'] == st.session_state.get("email"):
+                            st.error("Você não pode desabilitar a si mesmo.")
+                        else:
+                            update_user_status(row['uid'], is_disabled=True)
+                            st.rerun()
+            
+            with col3:
+                st.write(f"Status: {'Inativo' if row['disabled'] else 'Ativo'}")
+            
+            st.markdown("---")
+
+except Exception as e:
+    st.error(f"Ocorreu um erro ao carregar os usuários: {e}")
