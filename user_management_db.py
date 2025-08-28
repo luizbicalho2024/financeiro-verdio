@@ -2,7 +2,6 @@
 import streamlit as st
 from firebase_config import db
 from datetime import datetime
-from bson import ObjectId
 
 def log_action(level, user, message, details=None):
     """Registra uma ação no log do sistema no Firestore."""
