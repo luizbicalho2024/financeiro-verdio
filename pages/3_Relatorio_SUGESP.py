@@ -53,14 +53,10 @@ MAPEAMENTO_SECRETARIAS = {
 # --- 2. FUNÇÕES DE LÓGICA ---
 
 def normalizar_texto(texto):
-    """Remove acentos, converte para maiúsculas e remove espaços extras para uma comparação robusta."""
+    """Remove acentos e converte para maiúsculas para uma comparação robusta."""
     if not isinstance(texto, str):
         return ""
-    # Remove acentos
-    nfkd_form = unicodedata.normalize('NFD', texto)
-    texto_sem_acentos = "".join([c for c in nfkd_form if not unicodedata.combining(c)])
-    # Converte para maiúsculas e remove espaços no início/fim
-    return texto_sem_acentos.upper().strip()
+    return "".join(c for c in unicodedata.normalize('NFD', texto) if unicodedata.category(c) != 'Mn').upper()
 
 @st.cache_data(ttl=600)
 def buscar_dados_api(token, endpoint):
