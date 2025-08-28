@@ -1,3 +1,4 @@
+# pages/3_Logs_do_Sistema.py
 import streamlit as st
 import pandas as pd
 import user_management_db as umdb
@@ -9,13 +10,18 @@ if not st.session_state.get("authentication_status"):
     st.error("🔒 Acesso Negado! Por favor, faça login para visualizar esta página.")
     st.stop()
 
-if st.session_state.get("role") != "admin":
+if st.session_state.get("role") != "Admin":
     st.error("🚫 Você não tem permissão para acessar esta página. Apenas Administradores.")
     st.stop()
 
+# --- BARRA LATERAL ---
 st.sidebar.image("imgs/v-c.png", width=120)
 st.sidebar.title(f"Olá, {st.session_state.get('name', 'N/A')}! 👋")
 st.sidebar.markdown("---")
+if st.sidebar.button("Logout"):
+    for key in list(st.session_state.keys()):
+        del st.session_state[key]
+    st.rerun()
 
 st.title("📋 Logs do Sistema")
 st.markdown("Registro de todas as ações importantes realizadas na plataforma.")
@@ -33,11 +39,11 @@ else:
     
     # Filtro por nível de log
     levels = df_logs['level'].unique()
-    selected_levels = st.sidebar.multiselect("Nível do Log", options=levels, default=levels)
+    selected_levels = st.sidebar.multiselect("Nível do Log", options=levels, default=list(levels))
     
     # Filtro por usuário
     users = df_logs['user'].unique()
-    selected_users = st.sidebar.multiselect("Usuário", options=users, default=users)
+    selected_users = st.sidebar.multisepreselect("Usuário", options=users, default=list(users))
     
     # Aplicar filtros
     filtered_df = df_logs[
