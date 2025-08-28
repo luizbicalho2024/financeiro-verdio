@@ -1,55 +1,30 @@
 # auth_functions.py
-
 import streamlit as st
-import firebase_admin
-from firebase_admin import credentials, auth, firestore
+from firebase_config import db, get_auth_admin_client
 
-# --- INICIALIZAÇÃO DO FIREBASE ---
+# Obtém o cliente de autenticação do Admin SDK
+auth_admin = get_auth_admin_client()
 
-def initialize_firebase():
-    """
-    Inicializa a conexão com o Firebase de forma segura.
-    """
-    if not firebase_admin._apps:
-        try:  # <-- CORREÇÃO: Faltava um ':' nesta linha
-            creds_dict = st.secrets["firebase_credentials"]
-            creds = credentials.Certificate(creds_dict)
-            firebase_admin.initialize_app(creds)
-        except Exception as e:
-            st.error(f"Falha ao inicializar o Firebase: {e}")
-            st.stop()
-    
-    return firestore.client()
-
-
-# --- FUNÇÕES DE BANCO DE DADOS E AUTENTICAÇÃO ---
-
-def get_user_role(db, uid):
-    """
-    Busca o nível de acesso (role) de um usuário no Firestore.
-    """
+def get_user_role(uid):
+    """Busca o nível de acesso (role) de um usuário no Firestore pelo UID."""
     try:
         user_doc = db.collection('users').document(uid).get()
         if user_doc.exists:
             return user_doc.to_dict().get('role', 'Usuário')
     except Exception as e:
         st.error(f"Erro ao buscar o nível de acesso: {e}")
-    
     return 'Usuário'
 
-def get_all_users(db):
-    """
-    Busca todos os usuários do Firebase Authentication e combina com suas roles do Firestore.
-    """
+def get_all_users():
+    """Busca todos os usuários do Firebase Authentication e combina com suas roles do Firestore."""
     try:
-        users_ref = auth.list_users()
         all_users = []
-        for user in users_ref.iterate_all():
+        for user in auth_admin.list_users().iterate_all():
             user_data = {
                 "uid": user.uid,
                 "email": user.email,
                 "disabled": user.disabled,
-                "role": get_user_role(db, user.uid)
+                "role": get_user_role(user.uid)
             }
             all_users.append(user_data)
         return all_users
@@ -57,15 +32,13 @@ def get_all_users(db):
         st.error(f"Erro ao carregar a lista de usuários: {e}")
         return []
 
-def create_new_user(db, email, password, role):
-    """
-    Cria um novo usuário no Firebase Auth e define sua role no Firestore.
-    """
+def create_new_user(email, password, role):
+    """Cria um novo usuário no Firebase Auth e define sua role no Firestore."""
     try:
-        new_user = auth.create_user(email=email, password=password)
+        new_user = auth_admin.create_user(email=email, password=password, disabled=False)
         db.collection('users').document(new_user.uid).set({
-            'role': role,
-            'email': email
+            'email': email,
+            'role': role
         })
         st.success(f"Usuário '{email}' criado com sucesso!")
         return True
@@ -73,24 +46,23 @@ def create_new_user(db, email, password, role):
         st.error(f"Erro ao criar usuário: {e}")
         return False
 
-def update_user_status(uid, disabled_status):
-    """
-    Atualiza o status (habilitado/desabilitado) de um usuário no Firebase Authentication.
-    """
+def update_user_status(uid, is_disabled):
+    """Atualiza o status (habilitado/desabilitado) de um usuário no Firebase Authentication."""
     try:
-        auth.update_user(uid, disabled=disabled_status)
+        auth_admin.update_user(uid, disabled=is_disabled)
+        status_text = "desabilitado" if is_disabled else "re-habilitado"
+        st.success(f"Usuário {status_text} com sucesso!")
         return True
     except Exception as e:
-        st.error(f"Erro ao atualizar o status do usuário {uid}: {e}")
+        st.error(f"Erro ao atualizar o status do usuário: {e}")
         return False
 
-def update_user_role(db, uid, new_role):
-    """
-    Atualiza a role de um usuário no documento correspondente no Firestore.
-    """
+def update_user_role(uid, new_role):
+    """Atualiza a role de um usuário no documento correspondente no Firestore."""
     try:
         db.collection('users').document(uid).update({'role': new_role})
+        st.success("Nível de acesso atualizado com sucesso!")
         return True
     except Exception as e:
-        st.error(f"Erro ao atualizar o nível de acesso do usuário {uid}: {e}")
+        st.error(f"Erro ao atualizar o nível de acesso do usuário: {e}")
         return False
