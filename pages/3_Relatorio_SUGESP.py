@@ -1,4 +1,4 @@
-# pages/8_Relatorio_API.py
+# pages/8_Relatorio_API.py (ou 3_Relatorio_SUGESP.py)
 import sys
 import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -6,7 +6,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 import streamlit as st
 import pandas as pd
 import requests
-from datetime import datetime
+from datetime import datetime, timedelta  # <--- CORREÇÃO AQUI
 import io
 
 # --- 1. CONFIGURAÇÃO DA PÁGINA E AUTENTICAÇÃO ---
@@ -61,13 +61,12 @@ def processar_dados_para_relatorio(dados_api, nome_cliente_principal, taxa_ir_ge
 
     df = pd.json_normalize(dados_api)
 
-    # Renomeação e conversão de tipos
     df.rename(columns={
         'informacao.cliente.nome': 'Cliente',
         'informacao.search.subgrupo.nome': 'Secretaria',
         'valor_total': 'Valor Bruto',
         'valor_liquido_cliente': 'Valor Liquido',
-        'imposto_renda': 'IR Retido',
+        'imposto_renda': 'IR Retido API',
         'informacao.produto.nome': 'Produto'
     }, inplace=True)
     
@@ -76,18 +75,15 @@ def processar_dados_para_relatorio(dados_api, nome_cliente_principal, taxa_ir_ge
     if df_filtrado.empty:
         return {}
 
-    # Preenche secretarias vazias e converte valores
     df_filtrado['Secretaria'] = df_filtrado['Secretaria'].fillna('Secretaria Não Informada')
-    for col in ['Valor Bruto', 'Valor Liquido', 'IR Retido']:
+    for col in ['Valor Bruto', 'Valor Liquido']:
         df_filtrado[col] = pd.to_numeric(df_filtrado[col], errors='coerce').fillna(0)
 
-    # Agrupamento por Secretaria
     dados_agrupados = {}
     for secretaria, group in df_filtrado.groupby('Secretaria'):
         valor_bruto_total = group['Valor Bruto'].sum()
         valor_liquido_total = group['Valor Liquido'].sum()
         
-        # O IR Retido no modelo parece ser calculado, não o somatório da API
         ir_retido_total = valor_bruto_total * (taxa_ir_geral / 100)
 
         consumo_por_produto = group.groupby('Produto')['Valor Bruto'].sum()
@@ -106,13 +102,11 @@ def processar_dados_para_relatorio(dados_api, nome_cliente_principal, taxa_ir_ge
 
 def gerar_texto_relatorio(dados_secretaria, inputs_manuais):
     """
-    Monta a string final para uma secretaria específica usando os dados processados e os inputs manuais.
+    Monta a string final para uma secretaria específica.
     """
-    # Formata o consumo e o IR por item
     consumo_str = ", ".join([f"{i+1}. {produto} R$ {valor:,.2f}" for i, (produto, valor) in enumerate(dados_secretaria['Consumo'].items())])
     ir_item_str = "; ".join([f"{i+1} - IR R$ {valor:,.2f}" for i, (produto, valor) in enumerate(dados_secretaria['IR por Item'].items())])
 
-    # Monta a string final com f-string
     relatorio = (
         f"(CONTRATO nº {inputs_manuais['contrato']}/PGE-SUGESP – {inputs_manuais['secretaria_nome']}) | "
         f"Valor Bruto: R$ {dados_secretaria['Valor Bruto']:,.2f} | "
@@ -137,7 +131,6 @@ st.title("✍️ Gerador de Relatório de Faturamento")
 st.markdown("Gere o texto final para faturamento a partir dos dados da API e informações manuais.")
 st.markdown("---")
 
-# --- Inputs de API e Filtros ---
 st.subheader("1. Consulta à API")
 col1, col2 = st.columns(2)
 with col1:
@@ -149,7 +142,6 @@ with col2:
     data_inicio = st.date_input("🗓️ Data de Início", value=inicio_mes)
     data_fim = st.date_input("🗓️ Data de Fim", value=hoje)
 
-# --- Inputs Manuais ---
 st.markdown("---")
 st.subheader("2. Informações Manuais para o Relatório")
 col_a, col_b = st.columns(2)
@@ -191,7 +183,6 @@ if st.button("🚀 Gerar Texto do Relatório", type="primary"):
 
                 texto_final_completo = ""
                 
-                # Cria uma área de edição para cada secretaria
                 for secretaria, dados in dados_agrupados.items():
                     st.markdown(f"#### {secretaria}")
                     empenho_secretaria = st.text_input("Nº do Empenho", key=secretaria, placeholder="Ex: 2025NE000123")
@@ -212,7 +203,7 @@ if st.button("🚀 Gerar Texto do Relatório", type="primary"):
                         }
                         
                         texto_gerado = gerar_texto_relatorio(dados, inputs_manuais)
-                        texto_final_completo += texto_gerado + "\n"
+                        texto_final_completo += texto_gerado + "\n\n"
 
                 if texto_final_completo:
                     st.markdown("---")
