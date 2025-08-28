@@ -33,13 +33,15 @@ if st.sidebar.button("Logout"):
 
 # --- DICIONÁRIO DE MAPEAMENTO MANUAL ---
 # Se uma secretaria da API de transações não encontra um empenho,
-# adicione o nome dela aqui e, ao lado, o nome correspondente da API de empenhos.
+# adicione o nome dela (da lista "copie daqui") e, ao lado, 
+# o nome correspondente da API de empenhos (da lista "cole aqui").
 MAPEAMENTO_SECRETARIAS = {
     "POLICIA CIVIL": "POLÍCIA CIVIL",
     "CORPO DE BOMBEIROS MILITAR DE RONDONIA": "CORPO DE BOMBEIROS MILITAR",
     "EMATER": "EMATER-RO",
-    # Adicione outras correspondências aqui conforme necessário. Exemplo:
-    # "NOME_NA_API_TRANSACOES": "NOME_NA_API_EMPENHOS",
+    "CAP": "CASA DE APOIO A SAUDE DO INDIO",
+    "CAD/FROTA": "SUGESP - COORDENADORIA DE APOIO LOGISTICO E GESTAO DE FROTA",
+    # Adicione outras correspondências aqui conforme necessário
 }
 
 
@@ -70,24 +72,20 @@ def buscar_dados_api(token, endpoint):
 def mapear_empenhos(dados_empenhos):
     """Cria um dicionário mapeando o nome NORMALIZADO da secretaria ao seu número de empenho."""
     mapa = {}
+    nomes_originais_empenhos = []
     if not dados_empenhos:
         return mapa, []
-    
-    nomes_originais_empenhos = []
     for empenho in dados_empenhos:
         if empenho.get('grupo') and empenho['grupo'].get('nome'):
             secretaria_original = empenho['grupo']['nome']
-            nomes_originais_empenhos.append(secretaria_original) # Guarda o nome original para debug
+            nomes_originais_empenhos.append(secretaria_original)
             secretaria_normalizada = normalizar_texto(secretaria_original)
             numero_empenho = empenho.get('numero_empenho', 'Não encontrado')
-            
             if secretaria_normalizada not in mapa:
                 mapa[secretaria_normalizada] = []
             mapa[secretaria_normalizada].append(numero_empenho)
-    
     for secretaria, lista_empenhos in mapa.items():
         mapa[secretaria] = " / ".join(filter(None, lista_empenhos))
-        
     return mapa, list(set(nomes_originais_empenhos))
 
 def processar_dados_para_relatorio(dados_transacoes, nome_cliente_principal):
@@ -113,12 +111,12 @@ def processar_dados_para_relatorio(dados_transacoes, nome_cliente_principal):
     dados_agrupados = {}
     for secretaria, group in df_filtrado.groupby('Secretaria'):
         dados_agrupados[secretaria] = {
-            'Valor Bruto': group['Valor Bruto'].sum(),
-            'Valor Liquido': group['Valor Liquido'].sum(),
-            'Taxa Negativa': group['Taxa Negativa'].sum(),
-            'IR Retido': group['IR Retido'].sum(),
-            'Consumo': group.groupby('Produto')['Valor Bruto'].sum().to_dict(),
-            'IR por Item': group.groupby('Produto')['IR Retido'].sum().to_dict()
+            'Valor Bruto': round(group['Valor Bruto'].sum(), 2),
+            'Valor Liquido': round(group['Valor Liquido'].sum(), 2),
+            'Taxa Negativa': round(group['Taxa Negativa'].sum(), 2),
+            'IR Retido': round(group['IR Retido'].sum(), 2),
+            'Consumo': group.groupby('Produto')['Valor Bruto'].sum().round(2).to_dict(),
+            'IR por Item': group.groupby('Produto')['IR Retido'].sum().round(2).to_dict()
         }
     return dados_agrupados
 
@@ -126,30 +124,31 @@ def gerar_texto_relatorio(dados_secretaria, inputs_manuais, empenho_automatico):
     """Monta a string final para uma secretaria específica."""
     consumo_str = ", ".join([f"{i+1}. {produto} R$ {valor:,.2f}" for i, (produto, valor) in enumerate(dados_secretaria['Consumo'].items())])
     ir_item_str = "; ".join([f"{i+1} - IR R$ {valor:,.2f}" for i, (produto, valor) in enumerate(dados_secretaria['IR por Item'].items()) if produto in dados_secretaria['Consumo']])
-    relatorio = (
-        f"(CONTRATO nº {inputs_manuais['contrato']}/PGE-SUGESP – {inputs_manuais['secretaria_nome']}) | "
-        f"Valor Bruto: R$ {dados_secretaria['Valor Bruto']:,.2f} | "
-        f"Taxa Negativa: -R$ {dados_secretaria['Taxa Negativa']:,.2f} | "
-        f"Valor Líquido: R$ {dados_secretaria['Valor Liquido']:,.2f} | "
-        f"IR Retido: R${dados_secretaria['IR Retido']:,.2f} | "
-        f"Período: {inputs_manuais['periodo']} | "
-        f"Empenho: {empenho_automatico} | "
-        f"Vencimento: {inputs_manuais['vencimento']} | "
-        f"DADOS BANCÁRIOS: Banco {inputs_manuais['banco']} | Ag. {inputs_manuais['agencia']} | C/C {inputs_manuais['conta']} | "
-        f"CNPJ {inputs_manuais['cnpj']} – {inputs_manuais['nome_empresa']} | "
-        f"Consumo: {consumo_str} | "
-        f"(cada item: {ir_item_str}) | "
-        f"Objeto: Prestação contínua de serviços de gerenciamento de abastecimento de combustíveis e ARLA em postos credenciados via sistema informatizado (Termo Contrato nº {inputs_manuais['termo_contrato']}). | "
-        f"VALOR DA CORRETAGEM OU COMISSÃO: ZERO - CONFORME LEI COMPLEMENTAR 878/2021, Art. 260"
-    )
-    return relatorio
+    
+    # Constrói a string parte por parte para evitar erros de formatação
+    partes = [
+        f"(CONTRATO nº {inputs_manuais['contrato']}/PGE-SUGESP – {inputs_manuais['secretaria_nome']})",
+        f"Valor Bruto: R$ {dados_secretaria['Valor Bruto']:,.2f}",
+        f"Taxa Negativa: -R$ {dados_secretaria['Taxa Negativa']:,.2f}",
+        f"Valor Líquido: R$ {dados_secretaria['Valor Liquido']:,.2f}",
+        f"IR Retido: R$ {dados_secretaria['IR Retido']:,.2f}",
+        f"Período: {inputs_manuais['periodo']}",
+        f"Empenho: {empenho_automatico}",
+        f"Vencimento: {inputs_manuais['vencimento']}",
+        f"DADOS BANCÁRIOS: Banco {inputs_manuais['banco']} | Ag. {inputs_manuais['agencia']} | C/C {inputs_manuais['conta']}",
+        f"CNPJ {inputs_manuais['cnpj']} – {inputs_manuais['nome_empresa']}",
+        f"Consumo: {consumo_str}",
+        f"(cada item: {ir_item_str})",
+        f"Objeto: Prestação contínua de serviços de gerenciamento de abastecimento de combustíveis e ARLA em postos credenciados via sistema informatizado (Termo Contrato nº {inputs_manuais['termo_contrato']}).",
+        "VALOR DA CORRETAGEM OU COMISSÃO: ZERO - CONFORME LEI COMPLEMENTAR 878/2021, Art. 260"
+    ]
+    return " | ".join(partes)
 
 # --- 3. INTERFACE DA PÁGINA ---
 st.title("✍️ Gerador de Relatório de Faturamento")
 st.markdown("Gere o texto final para faturamento a partir dos dados da API e informações manuais.")
 st.markdown("---")
 
-# ... (O resto da interface permanece igual) ...
 st.subheader("1. Consulta à API")
 col1, col2 = st.columns(2)
 with col1:
@@ -177,7 +176,6 @@ with col_a:
     contrato = st.text_input("Nº do Contrato", "1551/2024")
     periodo = st.text_input("Período", value=periodo_formatado)
     vencimento = st.date_input("Vencimento", hoje + timedelta(days=30))
-
 with col_b:
     termo_contrato = st.text_input("Nº do Termo de Contrato (Objeto)", "1551 – 0055472251")
     nome_empresa = st.text_input("Nome da Empresa", "Uzzipay Administradora de Convênios Ltda.")
@@ -192,13 +190,11 @@ with col_d:
 with col_e:
     conta = st.text_input("C/C", "20-5")
 
-
 if st.button("🚀 Gerar Texto do Relatório", type="primary"):
     with st.spinner("Buscando e processando os dados... (Isso pode levar um momento)"):
         endpoint_transacoes = f"transacoes?TransacaoSearch[data_cadastro]={data_inicio.strftime('%d/%m/%Y')} - {data_fim.strftime('%d/%m/%Y')}"
         dados_transacoes, erro_transacoes = buscar_dados_api(token, endpoint_transacoes)
         dados_empenhos, erro_empenhos = buscar_dados_api(token, "empenhos?expand=contrato.empresa,grupo")
-
         if erro_transacoes:
             st.error(erro_transacoes)
         elif erro_empenhos:
@@ -206,30 +202,23 @@ if st.button("🚀 Gerar Texto do Relatório", type="primary"):
         else:
             mapa_empenhos, nomes_empenhos_api = mapear_empenhos(dados_empenhos)
             dados_agrupados = processar_dados_para_relatorio(dados_transacoes, nome_cliente)
-            
             if not dados_agrupados:
                 st.warning(f"Nenhuma transação encontrada para o cliente '{nome_cliente}' no período selecionado.")
             else:
                 st.success(f"Dados processados! {len(dados_agrupados)} secretarias encontradas.")
                 st.markdown("---")
                 st.subheader("3. Resultado Final")
-
                 secretarias_sem_empenho = []
-
                 for secretaria_original, dados in sorted(dados_agrupados.items()):
                     secretaria_normalizada = normalizar_texto(secretaria_original)
                     empenho_automatico = mapa_empenhos.get(secretaria_normalizada)
-
-                    # Lógica de fallback usando o mapeamento manual
                     if not empenho_automatico:
                         nome_mapeado = MAPEAMENTO_SECRETARIAS.get(secretaria_normalizada)
                         if nome_mapeado:
                             empenho_automatico = mapa_empenhos.get(normalizar_texto(nome_mapeado))
-                    
                     if not empenho_automatico:
                         empenho_automatico = "EMPENHO NÃO ENCONTRADO"
                         secretarias_sem_empenho.append(secretaria_original)
-
                     inputs_manuais = {
                         "contrato": contrato, "secretaria_nome": secretaria_original,
                         "periodo": periodo, "vencimento": vencimento.strftime('%d/%m/%Y'),
@@ -237,23 +226,21 @@ if st.button("🚀 Gerar Texto do Relatório", type="primary"):
                         "cnpj": cnpj, "nome_empresa": nome_empresa,
                         "termo_contrato": termo_contrato,
                     }
-                    
                     texto_gerado = gerar_texto_relatorio(dados, inputs_manuais, empenho_automatico)
-                    
                     st.markdown(f"#### {secretaria_original}")
                     if empenho_automatico == "EMPENHO NÃO ENCONTRADO":
                         st.warning(texto_gerado)
                     else:
                         st.code(texto_gerado, language=None)
-                
-                # Exibe um resumo das secretarias sem empenho para facilitar o mapeamento
                 if secretarias_sem_empenho:
                     st.markdown("---")
-                    st.error("As seguintes secretarias não encontraram um empenho correspondente:")
-                    col_debug1, col_debug2 = st.columns(2)
-                    with col_debug1:
-                        st.write("**Nomes na API de Transações (copie daqui):**")
-                        st.json(secretarias_sem_empenho)
-                    with col_debug2:
-                        st.write("**Nomes disponíveis na API de Empenhos (cole aqui):**")
-                        st.json(sorted(nomes_empenhos_api))
+                    with st.expander("⚠️ AJUDA: Corrigir Empenhos Não Encontrados"):
+                        st.error("As seguintes secretarias não encontraram um empenho correspondente:")
+                        col_debug1, col_debug2 = st.columns(2)
+                        with col_debug1:
+                            st.write("**Nomes na API de Transações (copie daqui):**")
+                            st.json(secretarias_sem_empenho)
+                        with col_debug2:
+                            st.write("**Nomes disponíveis na API de Empenhos (cole aqui):**")
+                            st.json(sorted(nomes_empenhos_api))
+                        st.info("Para corrigir, adicione a correspondência no dicionário `MAPEAMENTO_SECRETARIAS` no início do script.")
