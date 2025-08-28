@@ -35,16 +35,11 @@ if st.sidebar.button("Logout"):
 
 def normalizar_texto(texto):
     """
-    Remove acentos, converte para maiúsculas e remove caracteres especiais
-    para uma comparação mais robusta.
+    Remove acentos e converte para maiúsculas para uma comparação robusta.
     """
     if not isinstance(texto, str):
         return ""
-    # Remove acentos
-    nfkd_form = unicodedata.normalize('NFKD', texto)
-    texto_sem_acentos = "".join([c for c in nfkd_form if not unicodedata.combining(c)])
-    # Deixa apenas letras e números e converte para maiúsculas
-    return "".join(filter(str.isalnum, texto_sem_acentos)).upper()
+    return "".join(c for c in unicodedata.normalize('NFD', texto) if unicodedata.category(c) != 'Mn').upper()
 
 @st.cache_data(ttl=600)
 def buscar_dados_api(token, endpoint):
@@ -80,7 +75,7 @@ def mapear_empenhos(dados_empenhos):
             mapa[secretaria_normalizada].append(numero_empenho)
     
     for secretaria, lista_empenhos in mapa.items():
-        mapa[secretaria] = " / ".join(lista_empenhos)
+        mapa[secretaria] = " / ".join(filter(None, lista_empenhos)) # Junta os empenhos
         
     return mapa
 
