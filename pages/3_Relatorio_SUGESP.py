@@ -35,9 +35,9 @@ if st.sidebar.button("Logout"):
 # ESTA É A FERRAMENTA PARA CORRIGIR EMPENHOS NÃO ENCONTRADOS.
 # Formato: "NOME NA API DE TRANSAÇÕES": "NOME CORRESPONDENTE NA API DE EMPENHOS",
 MAPEAMENTO_SECRETARIAS = {
-    "POLICIA CIVIL": "POLÍCIA CIVIL",
-    "CORPO DE BOMBEIROS MILITAR DE RONDONIA": "CORPO DE BOMBEIROS MILITAR",
-    "EMATER": "EMATER-RO",
+    "POLICIA CIVIL": "POLICIA CIVIL/RO",
+    "CORPO DE BOMBEIROS MILITAR DE RONDONIA": "CBM/RO",
+    "EMATER": "EMATER/RO",
     "VEICULOS - REGIONAIS": "SUGESP - COORDENADORIA DE APOIO LOGISTICO E GESTAO DE FROTA",
     "VEICULOS - SUGESP": "SUGESP - COORDENADORIA DE APOIO LOGISTICO E GESTAO DE FROTA",
     "SRE/JARU": "SECRETARIA REGIONAL DE EDUCACAO DE JARU",
@@ -261,9 +261,9 @@ if st.button("🚀 Gerar Texto do Relatório", type="primary"):
                     secretaria_normalizada = normalizar_texto(secretaria_original)
                     empenho_automatico = mapa_empenhos.get(secretaria_normalizada)
                     if not empenho_automatico:
-                        nome_mapeado_de_para = MAPEAMENTO_SECRETARIAS.get(secretaria_original) # Busca pelo nome original
-                        if nome_mapeado_de_para:
-                            empenho_automatico = mapa_empenhos.get(normalizar_texto(nome_mapeado_de_para))
+                        nome_mapeado = MAPEAMENTO_SECRETARIAS.get(secretaria_original) # Busca pelo nome original
+                        if nome_mapeado:
+                            empenho_automatico = mapa_empenhos.get(normalizar_texto(nome_mapeado))
                     if not empenho_automatico:
                         empenho_automatico = "EMPENHO NÃO ENCONTRADO"
                         if secretaria_original != "Secretaria Não Informada":
