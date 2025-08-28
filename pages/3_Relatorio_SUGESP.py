@@ -76,7 +76,11 @@ def mapear_ir_produtos(dados_produtos):
         return mapa_ir
     for produto in dados_produtos:
         produto_id = produto.get('id')
-        aliquota = float(produto.get('aliquota_ir', 0)) / 100.0
+        # --- CORREÇÃO AQUI ---
+        # Verifica se 'aliquota_ir' não é nula antes de converter
+        raw_aliquota = produto.get('aliquota_ir')
+        aliquota = float(raw_aliquota) / 100.0 if raw_aliquota is not None else 0.0
+        
         if produto_id:
             mapa_ir[produto_id] = aliquota
     return mapa_ir
@@ -174,13 +178,11 @@ with col2:
 st.markdown("---")
 st.subheader("2. Informações Manuais para o Relatório")
 
-# Dicionário para traduzir o mês para português
 meses_em_portugues = {
     1: "Janeiro", 2: "Fevereiro", 3: "Março", 4: "Abril",
     5: "Maio", 6: "Junho", 7: "Julho", 8: "Agosto",
     9: "Setembro", 10: "Outubro", 11: "Novembro", 12: "Dezembro"
 }
-# Formata o período usando o dicionário
 nome_mes = meses_em_portugues.get(data_inicio.month, "")
 periodo_formatado = f"{nome_mes.capitalize()}/{data_inicio.year}"
 
