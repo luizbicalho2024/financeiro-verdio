@@ -14,7 +14,7 @@ from fpdf import FPDF
 st.set_page_config(
     layout="wide",
     page_title="Assistente de Faturamento",
-    page_icon="💲"
+    page_icon="Verdio"
 )
 
 # --- VERIFICAÇÃO DE LOGIN ---
