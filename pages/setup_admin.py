@@ -1,15 +1,11 @@
-import firebase_admin
-from firebase_admin import credentials, firestore, auth
+# pages/setup_admin.py
 import streamlit as st
-import json
+from auth_functions import create_new_user
 
-if not firebase_admin._apps:
-    cred = credentials.Certificate(dict(st.secrets["firebase"]))
-    firebase_admin.initialize_app(cred)
-db = firestore.client()
+st.set_page_config(page_title="Setup Admin", page_icon="🔑", layout="centered")
 
-
-st.title("🔑 Criar primeiro usuário Admin")
+st.title("🔑 Criar Primeiro Usuário Admin")
+st.warning("Use esta página apenas para a configuração inicial do sistema.")
 
 with st.form("create_admin_form"):
     email = st.text_input("E-mail do Admin")
@@ -20,20 +16,5 @@ if submit:
     if not email or not password:
         st.error("Preencha todos os campos.")
     else:
-        try:
-            # Criar usuário no Firebase Authentication
-            user = auth.create_user(
-                email=email,
-                password=password,
-                disabled=False
-            )
-
-            # Salvar no Firestore com role=Admin
-            db.collection("users").document(user.uid).set({
-                "email": email,
-                "role": "Admin"
-            })
-
-            st.success(f"✅ Admin {email} criado com sucesso!")
-        except Exception as e:
-            st.error(f"Erro ao criar Admin: {e}")
+        # A função create_new_user já lida com Auth e Firestore
+        create_new_user(email, password, "Admin")
