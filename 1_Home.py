@@ -1,65 +1,51 @@
 # 1_Home.py
 import streamlit as st
 from firebase_config import auth_client, db
-from auth_functions import get_user_role
 
-def app():
-    st.set_page_config(page_title="Login", page_icon="🔑", layout="centered")
+st.set_page_config(page_title="Login", page_icon="🔑", layout="centered")
 
-    st.title("🔑 Sistema de Login")
+st.title("🔑 Sistema de Login Verdio")
 
-    # Se já estiver logado, mostra informações e botão de logout
-    if "authentication_status" in st.session_state and st.session_state["authentication_status"]:
-        st.success(f"Você já está logado como **{st.session_state['email']}**.")
-        st.info(f"Seu nível de acesso é: **{st.session_state['role']}**")
-        
-        if st.button("Ir para o Dashboard"):
-            st.switch_page("pages/6_Faturamento.py")
+# --- Lógica de Login ---
+# Se o usuário já estiver logado, mostra mensagem e botão de logout
+if 'user_info' in st.session_state:
+    user_email = st.session_state['user_info']['email']
+    st.success(f"Login realizado com sucesso como **{user_email}**.")
+    st.info(f"Nível de acesso: **{st.session_state.get('role', 'Usuário')}**")
+    
+    if st.button("Logout"):
+        del st.session_state['user_info']
+        if 'role' in st.session_state:
+            del st.session_state['role']
+        st.rerun()
+    st.stop()
 
-        if st.button("Logout"):
-            # Limpa o estado da sessão
-            for key in list(st.session_state.keys()):
-                del st.session_state[key]
-            st.rerun()
-        
-        st.stop()
+# Formulário de login
+with st.form("login_form"):
+    email = st.text_input("E-mail")
+    password = st.text_input("Senha", type="password")
+    submit_button = st.form_submit_button("Entrar")
 
-    # Formulário de login
-    with st.form("login_form"):
-        email = st.text_input("E-mail")
-        password = st.text_input("Senha", type="password")
-        login_button = st.form_submit_button("Login")
-
-        if login_button:
-            if not email or not password:
-                st.error("Por favor, preencha e-mail e senha.")
-                return
-
+    if submit_button:
+        if not email or not password:
+            st.error("Por favor, preencha todos os campos.")
+        else:
             try:
-                # Autentica com o Pyrebase
-                user_credential = auth_client.sign_in_with_email_and_password(email, password)
-                user_id_token = user_credential['idToken']
+                # Tenta fazer login com e-mail e senha
+                user = auth_client.sign_in_with_email_and_password(email, password)
+                st.session_state['user_info'] = user # Salva informações do usuário na sessão
                 
-                # Obtém o UID do usuário a partir do token
-                decoded_token = auth_client.get_account_info(user_id_token)['users'][0]
-                uid = decoded_token['localId']
+                # Após o login, busca a "role" do usuário no Firestore
+                uid = user['localId']
+                user_doc = db.collection('users').document(uid).get()
 
-                # Busca o perfil e o nível de acesso no Firestore
-                user_role = get_user_role(uid)
-
-                # Define o estado da sessão
-                st.session_state["authentication_status"] = True
-                st.session_state["email"] = email
-                st.session_state["uid"] = uid
-                st.session_state["role"] = user_role
-                st.session_state["name"] = email.split('@')[0].capitalize()
+                if user_doc.exists:
+                    st.session_state['role'] = user_doc.to_dict().get('role', 'Usuário')
+                else:
+                    st.session_state['role'] = 'Usuário' # Role padrão se não encontrar
                 
+                # Força o recarregamento da página para refletir o estado de login
                 st.rerun()
 
             except Exception as e:
-                st.error("E-mail ou senha incorretos. Verifique suas credenciais.")
-                st.error(f"Detalhe do erro: {e}", icon="ℹ️")
-
-
-if __name__ == "__main__":
-    app()
+                st.error("E-mail ou senha inválidos. Verifique suas credenciais.")
