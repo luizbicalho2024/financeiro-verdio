@@ -43,6 +43,9 @@ MAPEAMENTO_SECRETARIAS = {
     "SRE/JARU": "SECRETARIA REGIONAL DE EDUCACAO DE JARU",
     "SRE/OURO PRETO DO OESTE": "SECRETARIA REGIONAL DE EDUCACAO DE OURO PRETO",
     "SRE/VILHENA": "SECRETARIA REGIONAL DE EDUCACAO DE VILHENA",
+    "CAP": "CASA DE APOIO A SAUDE DO INDIO",
+    "CAD/FROTA": "SUGESP - COORDENADORIA DE APOIO LOGISTICO E GESTAO DE FROTA",
+    "EQUIPAMENTO - SETUR/RO": "SETUR",
     # Adicione outras correspondências que identificar na secção de ajuda no final da página
 }
 
@@ -50,10 +53,14 @@ MAPEAMENTO_SECRETARIAS = {
 # --- 2. FUNÇÕES DE LÓGICA ---
 
 def normalizar_texto(texto):
-    """Remove acentos e converte para maiúsculas para uma comparação robusta."""
+    """Remove acentos, converte para maiúsculas e remove espaços extras para uma comparação robusta."""
     if not isinstance(texto, str):
         return ""
-    return "".join(c for c in unicodedata.normalize('NFD', texto) if unicodedata.category(c) != 'Mn').upper()
+    # Remove acentos
+    nfkd_form = unicodedata.normalize('NFD', texto)
+    texto_sem_acentos = "".join([c for c in nfkd_form if not unicodedata.combining(c)])
+    # Converte para maiúsculas e remove espaços no início/fim
+    return texto_sem_acentos.upper().strip()
 
 @st.cache_data(ttl=600)
 def buscar_dados_api(token, endpoint):
