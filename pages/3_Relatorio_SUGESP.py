@@ -6,7 +6,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 import streamlit as st
 import pandas as pd
 import requests
-from datetime import datetime
+from datetime import datetime, timedelta
 import unicodedata
 import io
 
@@ -57,8 +57,8 @@ def processar_dados_completos(dados_faturas, dados_empenhos, dados_transacoes, d
     if not dados_faturas:
         return {}
 
-    # Mapeia contratos e empenhos para busca rápida
-    mapa_contratos = {c['id']: c.get('numero', 'N/A') for c in dados_contratos}
+    # Mapeia contratos e empenhos para busca rápida por ID
+    mapa_contratos = {c['id']: c.get('numero', 'N/A') for c in dados_contratos if 'id' in c}
     mapa_empenhos = {e['grupo_id']: e.get('numero_empenho', 'NÃO ENCONTRADO') for e in dados_empenhos if 'grupo_id' in e}
     
     # Processa transações para detalhamento de consumo
@@ -70,7 +70,7 @@ def processar_dados_completos(dados_faturas, dados_empenhos, dados_transacoes, d
         'imposto_renda': 'IR Retido'
     }, inplace=True)
     
-    for col in ['Valor Bruto', 'IR Retido']:
+    for col in ['Valor Bruto', 'IR Retido', 'grupo_id']:
         df_transacoes[col] = pd.to_numeric(df_transacoes[col], errors='coerce').fillna(0)
 
     relatorios_finais = {}
@@ -97,23 +97,23 @@ def processar_dados_completos(dados_faturas, dados_empenhos, dados_transacoes, d
         consumo = transacoes_secretaria.groupby('Produto')['Valor Bruto'].sum().round(2).to_dict()
         ir_por_item = transacoes_secretaria.groupby('Produto')['IR Retido'].sum().round(2).to_dict()
 
-        # Encontra o contrato associado (lógica pode precisar de refinamento se a ligação não for direta)
-        # Assumindo que o contrato pode ser encontrado pelo cliente_id na fatura
-        contrato_id_encontrado = None
-        for c in dados_contratos:
-            if c.get('empresa_id') == fatura.get('cliente_id'):
-                contrato_id_encontrado = c.get('id')
-                break
-        
+        contrato_id_fatura = fatura.get('configuracao', {}).get('contrato_id')
+        numero_contrato = mapa_contratos.get(contrato_id_fatura, "NÃO ENCONTRADO")
+
+        # Garante que os valores numéricos sejam tratados corretamente
+        valor_bruto = float(fatura.get('valor_bruto', 0))
+        valor_liquido = float(fatura.get('valor_liquido', 0))
+        ir_retido = float(fatura.get('imposto_renda', 0))
+
         relatorios_finais[secretaria_nome] = {
-            "Valor Bruto": fatura.get('valor_bruto', 0),
-            "Taxa Negativa": fatura.get('valor_bruto', 0) - fatura.get('valor_liquido', 0),
-            "Valor Liquido": fatura.get('valor_liquido', 0),
-            "IR Retido": fatura.get('imposto_renda', 0),
+            "Valor Bruto": valor_bruto,
+            "Taxa Negativa": round(valor_bruto - valor_liquido, 2),
+            "Valor Liquido": valor_liquido,
+            "IR Retido": ir_retido,
             "Período": f"{datetime.strptime(fatura['inicio_apuracao'], '%Y-%m-%d %H:%M:%S').strftime('%B/%Y').capitalize()}",
             "Vencimento": datetime.strptime(fatura['liquidacao_prevista'], '%Y-%m-%d %H:%M:%S').strftime('%d/%m/%Y'),
             "Empenho": mapa_empenhos.get(grupo_id, "NÃO ENCONTRADO"),
-            "Numero Contrato": mapa_contratos.get(contrato_id_encontrado, "NÃO ENCONTRADO"),
+            "Numero Contrato": numero_contrato,
             "Consumo": consumo,
             "IR por Item": ir_por_item
         }
