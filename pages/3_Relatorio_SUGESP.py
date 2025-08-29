@@ -35,6 +35,7 @@ if st.sidebar.button("Logout"):
 # ESTA É A FERRAMENTA PARA CORRIGIR EMPENHOS NÃO ENCONTRADOS.
 # Formato: "NOME NA API DE TRANSAÇÕES": "NOME CORRESPONDENTE NA API DE EMPENHOS",
 MAPEAMENTO_SECRETARIAS = {
+    # Mapeamentos deduzidos dos erros anteriores
     "POLICIA CIVIL": "POLICIA CIVIL/RO",
     "CORPO DE BOMBEIROS MILITAR DE RONDONIA": "CBM/RO",
     "EMATER": "EMATER/RO",
@@ -47,6 +48,8 @@ MAPEAMENTO_SECRETARIAS = {
     "SRE/CEREJEIRAS": "SECRETARIA REGIONAL DE EDUCACAO DE CEREJEIRAS",
     "CAP": "CASA DE APOIO A SAUDE DO INDIO",
     "CAD/FROTA": "SUGESP - COORDENADORIA DE APOIO LOGISTICO E GESTAO DE FROTA",
+
+    # Mapeamentos genéricos para "Equipamentos" e "Veículos"
     "Equipamento - SETUR/RO": "SETUR/RO",
     "Equipamentos - AGEVISA/RO": "AGEVISA/RO",
     "Equipamentos - CBM/RO": "CBM/RO",
@@ -91,6 +94,8 @@ MAPEAMENTO_SECRETARIAS = {
     "Veículos - SETIC/RO": "SETIC/RO",
     "Veículos - SETUR/RO": "SETUR/RO",
     "Veículos - SOPH/RO": "SOPH/RO",
+    
+    # Adicione outras correspondências que identificar na secção de ajuda no final da página
 }
 
 
@@ -261,7 +266,8 @@ if st.button("🚀 Gerar Texto do Relatório", type="primary"):
                     secretaria_normalizada = normalizar_texto(secretaria_original)
                     empenho_automatico = mapa_empenhos.get(secretaria_normalizada)
                     if not empenho_automatico:
-                        nome_mapeado = MAPEAMENTO_SECRETARIAS.get(secretaria_original) # Busca pelo nome original
+                        # Busca pelo nome original no dicionário de mapeamento
+                        nome_mapeado = MAPEAMENTO_SECRETARIAS.get(secretaria_original)
                         if nome_mapeado:
                             empenho_automatico = mapa_empenhos.get(normalizar_texto(nome_mapeado))
                     if not empenho_automatico:
@@ -293,3 +299,4 @@ if st.button("🚀 Gerar Texto do Relatório", type="primary"):
                             st.write("**Nomes disponíveis na API de Empenhos (cole aqui):**")
                             st.json(sorted(nomes_empenhos_api))
                         st.info("Para corrigir, adicione a correspondência no dicionário `MAPEAMENTO_SECRETARIAS` no início do script.")
+
