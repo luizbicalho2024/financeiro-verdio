@@ -1,4 +1,4 @@
-# pages/8_Relatorio_API.py (ou 3_Relatorio_SUGESP.py)
+# pages/8_Relatorio_API.py
 import sys
 import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -6,8 +6,9 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 import streamlit as st
 import pandas as pd
 import requests
-from datetime import datetime, timedelta
+from datetime import datetime
 import unicodedata
+import io
 
 # --- 1. CONFIGURAÇÃO DA PÁGINA E AUTENTICAÇÃO ---
 st.set_page_config(
@@ -30,83 +31,9 @@ if st.sidebar.button("Logout"):
         del st.session_state[key]
     st.switch_page("1_Home.py")
 
-
-# --- DICIONÁRIO DE MAPEAMENTO MANUAL ---
-# ESTA É A FERRAMENTA PARA CORRIGIR EMPENHOS NÃO ENCONTRADOS.
-# Formato: "NOME NA API DE TRANSAÇÕES": "NOME CORRESPONDENTE NA API DE EMPENHOS",
-MAPEAMENTO_SECRETARIAS = {
-    "POLICIA CIVIL": "POLICIA CIVIL/RO",
-    "CORPO DE BOMBEIROS MILITAR DE RONDONIA": "CBM/RO",
-    "EMATER": "EMATER/RO",
-    "VEICULOS - REGIONAIS": "SUGESP - COORDENADORIA DE APOIO LOGISTICO E GESTAO DE FROTA",
-    "VEICULOS - SUGESP": "SUGESP - COORDENADORIA DE APOIO LOGISTICO E GESTAO DE FROTA",
-    "SRE/JARU": "SECRETARIA REGIONAL DE EDUCACAO DE JARU",
-    "SRE/OURO PRETO DO OESTE": "SECRETARIA REGIONAL DE EDUCACAO DE OURO PRETO",
-    "SRE/VILHENA": "SECRETARIA REGIONAL DE EDUCACAO DE VILHENA",
-    "SRE/ALTA FLORESTA DO OESTE": "SECRETARIA REGIONAL DE EDUCACAO DE ALTA FLORESTA",
-    "SRE/CEREJEIRAS": "SECRETARIA REGIONAL DE EDUCACAO DE CEREJEIRAS",
-    "CAP": "CASA DE APOIO A SAUDE DO INDIO",
-    "CAD/FROTA": "SUGESP - COORDENADORIA DE APOIO LOGISTICO E GESTAO DE FROTA",
-
-    # Mapeamentos genéricos para "Equipamentos" e "Veículos"
-    "Equipamento - SETUR/RO": "SETUR/RO",
-    "Equipamentos - AGEVISA/RO": "AGEVISA/RO",
-    "Equipamentos - CBM/RO": "CBM/RO",
-    "Equipamentos - DETRAN/RO": "DETRAN/RO",
-    "Equipamentos - FEASE/RO": "FEASE/RO",
-    "Equipamentos - FEPRAM/RO": "FEPRAM/RO",
-    "Equipamentos - IDARON / RO": "IDARON / RO",
-    "Equipamentos - IDEP/RO": "IDEP/RO",
-    "Equipamentos - PM/RO": "PM/RO",
-    "Equipamentos - SEDAM/RO": "SEDAM/RO",
-    "Equipamentos - SEDUC/RO": "SEDUC/RO",
-    "Equipamentos - SEJUCEL / RO": "SEJUCEL / RO",
-    "Equipamentos - SEJUS/RO": "SEJUS/RO",
-    "Equipamentos - SEOSP/RO": "SEOSP/RO",
-    "Equipamentos - SESAU": "SESAU/RO",
-    "Equipamentos - SESDEC/RO": "SESDEC / RO",
-    "Equipamentos - SOPH/RO": "SOPH/RO",
-    "Veículos - AGERO/RO": "AGERO/RO",
-    "Veículos - AGEVISA/RO": "AGEVISA/RO",
-    "Veículos - CBM/RO": "CBM/RO",
-    "Veículos - CMR/RO": "CMR/RO",
-    "Veículos - DETRAN/RO": "DETRAN/RO",
-    "Veículos - FEASE/RO": "FEASE/RO",
-    "Veículos - FEPRAM/RO": "FEPRAM/RO",
-    "Veículos - IDARON/RO": "IDARON / RO",
-    "Veículos - IDEP/RO": "IDEP/RO",
-    "Veículos - IESPRO/RO": "IESPRO/RO",
-    "Veículos - IPEM/RO": "IPEM/RO",
-    "Veículos - IPERON": "IPERON/RO",
-    "Veículos - JUCER/RO": "JUCER/RO",
-    "Veículos - PM/RO": "PM/RO",
-    "Veículos - SEAGRI/RO": "SEAGRI/RO",
-    "Veículos - SEDEC/RO": "SEDEC/RO",
-    "Veículos - SEDUC/RO": "SEDUC/RO",
-    "Veículos - SEFIN/RO": "SEFIN/RO",
-    "Veículos - SEGEP/RO": "SEGEP/RO",
-    "Veículos - SEJUCEL / RO": "SEJUCEL / RO",
-    "Veículos - SEJUS/RO": "SEJUS/RO",
-    "Veículos - SEOSP/RO": "SEOSP/RO",
-    "Veículos - SEPAT/RO": "SEPAT/RO",
-    "Veículos - SESAU": "SESAU/RO",
-    "Veículos - SETIC/RO": "SETIC/RO",
-    "Veículos - SETUR/RO": "SETUR/RO",
-    "Veículos - SOPH/RO": "SOPH/RO",
-    
-    # Adicione outras correspondências que identificar na secção de ajuda no final da página
-}
-
-
 # --- 2. FUNÇÕES DE LÓGICA ---
 
-def normalizar_texto(texto):
-    """Remove acentos e converte para maiúsculas para uma comparação robusta."""
-    if not isinstance(texto, str):
-        return ""
-    return "".join(c for c in unicodedata.normalize('NFD', texto) if unicodedata.category(c) != 'Mn').upper()
-
-@st.cache_data(ttl=600)
+@st.cache_data(ttl=300)
 def buscar_dados_api(token, endpoint):
     """Função genérica para buscar dados de um endpoint da API."""
     if not token:
@@ -114,7 +41,7 @@ def buscar_dados_api(token, endpoint):
     headers = {"Authorization": f"Bearer {token}"}
     url = f"https://sigyo.uzzipay.com/api/{endpoint}"
     try:
-        response = requests.get(url, headers=headers, timeout=45)
+        response = requests.get(url, headers=headers, timeout=60)
         response.raise_for_status()
         return response.json(), None
     except requests.exceptions.HTTPError as err:
@@ -122,71 +49,91 @@ def buscar_dados_api(token, endpoint):
     except requests.exceptions.RequestException as e:
         return None, f"Erro de conexão com o endpoint '{endpoint}': {e}"
 
-def mapear_empenhos(dados_empenhos):
-    """Cria um dicionário mapeando o nome NORMALIZADO da secretaria ao seu número de empenho."""
-    mapa = {}
-    nomes_originais_empenhos = []
-    if not dados_empenhos:
-        return mapa, []
-    for empenho in dados_empenhos:
-        if empenho.get('grupo') and empenho['grupo'].get('nome'):
-            secretaria_original = empenho['grupo']['nome']
-            nomes_originais_empenhos.append(secretaria_original)
-            secretaria_normalizada = normalizar_texto(secretaria_original)
-            numero_empenho = empenho.get('numero_empenho', 'Não encontrado')
-            if secretaria_normalizada not in mapa:
-                mapa[secretaria_normalizada] = []
-            mapa[secretaria_normalizada].append(numero_empenho)
-    for secretaria, lista_empenhos in mapa.items():
-        mapa[secretaria] = " / ".join(filter(None, lista_empenhos))
-    return mapa, list(set(nomes_originais_empenhos))
-
-def processar_dados_para_relatorio(dados_transacoes, nome_cliente_principal):
-    """Filtra e agrupa os dados por secretaria, usando os valores diretamente da API de transações."""
-    if not dados_transacoes:
-        return None
-    df = pd.json_normalize(dados_transacoes)
-    df.rename(columns={
-        'informacao.cliente.nome': 'Cliente',
-        'informacao.search.subgrupo.nome': 'Secretaria',
-        'valor_total': 'Valor Bruto',
-        'valor_liquido_cliente': 'Valor Liquido',
-        'informacao.produto.nome': 'Produto',
-        'imposto_renda': 'IR Retido',
-        'valor_taxa_cliente': 'Taxa Negativa'
-    }, inplace=True)
-    df_filtrado = df[df['Cliente'].str.contains(nome_cliente_principal, case=False, na=False)].copy()
-    if df_filtrado.empty:
+def processar_dados_completos(dados_faturas, dados_empenhos, dados_transacoes, dados_contratos):
+    """
+    Orquestra o processamento e cruzamento de todas as fontes de dados.
+    A fonte da verdade são as faturas de recebimento.
+    """
+    if not dados_faturas:
         return {}
-    df_filtrado['Secretaria'] = df_filtrado['Secretaria'].fillna('Secretaria Não Informada')
-    for col in ['Valor Bruto', 'Valor Liquido', 'IR Retido', 'Taxa Negativa']:
-        df_filtrado[col] = pd.to_numeric(df_filtrado[col], errors='coerce').fillna(0)
-    dados_agrupados = {}
-    for secretaria, group in df_filtrado.groupby('Secretaria'):
-        dados_agrupados[secretaria] = {
-            'Valor Bruto': round(group['Valor Bruto'].sum(), 2),
-            'Valor Liquido': round(group['Valor Liquido'].sum(), 2),
-            'Taxa Negativa': round(group['Taxa Negativa'].sum(), 2),
-            'IR Retido': round(group['IR Retido'].sum(), 2),
-            'Consumo': group.groupby('Produto')['Valor Bruto'].sum().round(2).to_dict(),
-            'IR por Item': group.groupby('Produto')['IR Retido'].sum().round(2).to_dict()
-        }
-    return dados_agrupados
 
-def gerar_texto_relatorio(dados_secretaria, inputs_manuais, empenho_automatico):
+    # Mapeia contratos e empenhos para busca rápida
+    mapa_contratos = {c['id']: c.get('numero', 'N/A') for c in dados_contratos}
+    mapa_empenhos = {e['grupo_id']: e.get('numero_empenho', 'NÃO ENCONTRADO') for e in dados_empenhos if 'grupo_id' in e}
+    
+    # Processa transações para detalhamento de consumo
+    df_transacoes = pd.json_normalize(dados_transacoes)
+    df_transacoes.rename(columns={
+        'informacao.search.subgrupo.id': 'grupo_id',
+        'informacao.produto.nome': 'Produto',
+        'valor_total': 'Valor Bruto',
+        'imposto_renda': 'IR Retido'
+    }, inplace=True)
+    
+    for col in ['Valor Bruto', 'IR Retido']:
+        df_transacoes[col] = pd.to_numeric(df_transacoes[col], errors='coerce').fillna(0)
+
+    relatorios_finais = {}
+    
+    for fatura in dados_faturas:
+        grupo_id = fatura.get('grupo_id')
+        if not grupo_id:
+            continue
+            
+        secretaria_nome = fatura.get('grupo', {}).get('grupo', {}).get('nome', 'Secretaria Desconhecida')
+        
+        # Filtra transações para o grupo_id e período da fatura
+        data_inicio_apuracao = pd.to_datetime(fatura['inicio_apuracao']).date()
+        data_fim_apuracao = pd.to_datetime(fatura['fim_apuracao']).date()
+        
+        df_transacoes['data_cadastro_dt'] = pd.to_datetime(df_transacoes['data_cadastro']).dt.date
+        
+        transacoes_secretaria = df_transacoes[
+            (df_transacoes['grupo_id'] == grupo_id) &
+            (df_transacoes['data_cadastro_dt'] >= data_inicio_apuracao) &
+            (df_transacoes['data_cadastro_dt'] <= data_fim_apuracao)
+        ]
+        
+        consumo = transacoes_secretaria.groupby('Produto')['Valor Bruto'].sum().round(2).to_dict()
+        ir_por_item = transacoes_secretaria.groupby('Produto')['IR Retido'].sum().round(2).to_dict()
+
+        # Encontra o contrato associado (lógica pode precisar de refinamento se a ligação não for direta)
+        # Assumindo que o contrato pode ser encontrado pelo cliente_id na fatura
+        contrato_id_encontrado = None
+        for c in dados_contratos:
+            if c.get('empresa_id') == fatura.get('cliente_id'):
+                contrato_id_encontrado = c.get('id')
+                break
+        
+        relatorios_finais[secretaria_nome] = {
+            "Valor Bruto": fatura.get('valor_bruto', 0),
+            "Taxa Negativa": fatura.get('valor_bruto', 0) - fatura.get('valor_liquido', 0),
+            "Valor Liquido": fatura.get('valor_liquido', 0),
+            "IR Retido": fatura.get('imposto_renda', 0),
+            "Período": f"{datetime.strptime(fatura['inicio_apuracao'], '%Y-%m-%d %H:%M:%S').strftime('%B/%Y').capitalize()}",
+            "Vencimento": datetime.strptime(fatura['liquidacao_prevista'], '%Y-%m-%d %H:%M:%S').strftime('%d/%m/%Y'),
+            "Empenho": mapa_empenhos.get(grupo_id, "NÃO ENCONTRADO"),
+            "Numero Contrato": mapa_contratos.get(contrato_id_encontrado, "NÃO ENCONTRADO"),
+            "Consumo": consumo,
+            "IR por Item": ir_por_item
+        }
+        
+    return relatorios_finais
+
+def gerar_texto_relatorio(dados_secretaria, inputs_manuais):
     """Monta a string final para uma secretaria específica de forma robusta."""
     consumo_str = ", ".join([f"{i+1}. {produto} R$ {valor:,.2f}" for i, (produto, valor) in enumerate(dados_secretaria['Consumo'].items())])
-    ir_item_str = "; ".join([f"{i+1} - IR R$ {valor:,.2f}" for i, (produto, valor) in enumerate(dados_secretaria['IR por Item'].items()) if produto in dados_secretaria['Consumo']])
+    ir_item_str = "; ".join([f"{i+1} - IR R$ {valor:,.2f}" for i, (produto, valor) in enumerate(dados_secretaria['IR por Item'].items())])
     
     partes = [
-        f"(CONTRATO nº {inputs_manuais['contrato']}/PGE-SUGESP – {inputs_manuais['secretaria_nome']})",
+        f"(CONTRATO nº {dados_secretaria['Numero Contrato']}/PGE-SUGESP – {inputs_manuais['secretaria_nome']})",
         f"Valor Bruto: R$ {dados_secretaria['Valor Bruto']:,.2f}",
         f"Taxa Negativa: -R$ {dados_secretaria['Taxa Negativa']:,.2f}",
         f"Valor Líquido: R$ {dados_secretaria['Valor Liquido']:,.2f}",
         f"IR Retido: R$ {dados_secretaria['IR Retido']:,.2f}",
-        f"Período: {inputs_manuais['periodo']}",
-        f"Empenho: {empenho_automatico}",
-        f"Vencimento: {inputs_manuais['vencimento']}",
+        f"Período: {dados_secretaria['Período']}",
+        f"Empenho: {dados_secretaria['Empenho']}",
+        f"Vencimento: {dados_secretaria['Vencimento']}",
         f"DADOS BANCÁRIOS: Banco {inputs_manuais['banco']} | Ag. {inputs_manuais['agencia']} | C/C {inputs_manuais['conta']}",
         f"CNPJ {inputs_manuais['cnpj']} – {inputs_manuais['nome_empresa']}",
         f"Consumo: {consumo_str}",
@@ -198,104 +145,81 @@ def gerar_texto_relatorio(dados_secretaria, inputs_manuais, empenho_automatico):
 
 # --- 3. INTERFACE DA PÁGINA ---
 st.title("✍️ Gerador de Relatório de Faturamento")
-st.markdown("Gere o texto final para faturamento a partir dos dados da API e informações manuais.")
+st.markdown("Gere o texto final para faturamento a partir das faturas do sistema.")
 st.markdown("---")
 
-st.subheader("1. Consulta à API")
+st.subheader("1. Parâmetros da Consulta")
 col1, col2 = st.columns(2)
 with col1:
     token = st.text_input("🔑 Token de Autenticação", type="password")
-    nome_cliente = st.text_input("👤 Cliente Principal", value="SUGESP")
+    cliente_principal = st.text_input("👤 Cliente Principal (filtro inicial)", value="SUGESP")
 with col2:
+    # A data agora é apenas para o endpoint de transações
     hoje = datetime.now()
-    inicio_mes = hoje.replace(day=1)
-    data_inicio = st.date_input("🗓️ Data de Início", value=inicio_mes)
-    data_fim = st.date_input("🗓️ Data de Fim", value=hoje)
+    inicio_mes_passado = (hoje.replace(day=1) - timedelta(days=1)).replace(day=1)
+    data_inicio = st.date_input("🗓️ Data de Início (para filtro de consumo)", value=inicio_mes_passado)
+    data_fim = st.date_input("🗓️ Data de Fim (para filtro de consumo)", value=hoje)
 
 st.markdown("---")
-st.subheader("2. Informações Manuais para o Relatório")
-
-meses_em_portugues = {
-    1: "Janeiro", 2: "Fevereiro", 3: "Março", 4: "Abril",
-    5: "Maio", 6: "Junho", 7: "Julho", 8: "Agosto",
-    9: "Setembro", 10: "Outubro", 11: "Novembro", 12: "Dezembro"
-}
-nome_mes = meses_em_portugues.get(data_inicio.month, "")
-periodo_formatado = f"{nome_mes.capitalize()}/{data_inicio.year}"
-
+st.subheader("2. Informações Manuais (Padrão para todos os relatórios)")
 col_a, col_b = st.columns(2)
 with col_a:
-    contrato = st.text_input("Nº do Contrato", "1551/2024")
-    periodo = st.text_input("Período", value=periodo_formatado)
-    vencimento = st.date_input("Vencimento", hoje + timedelta(days=30))
-with col_b:
-    termo_contrato = st.text_input("Nº do Termo de Contrato (Objeto)", "1551 – 0055472251")
+    termo_contrato = st.text_input("Nº Padrão do Termo de Contrato (Objeto)", "1551 – 0055472251")
     nome_empresa = st.text_input("Nome da Empresa", "Uzzipay Administradora de Convênios Ltda.")
     cnpj = st.text_input("CNPJ", "05.884.660/0001-04")
-
-st.markdown("Dados Bancários")
-col_c, col_d, col_e = st.columns(3)
-with col_c:
+with col_b:
     banco = st.text_input("Banco", "552")
-with col_d:
     agencia = st.text_input("Agência", "0001")
-with col_e:
     conta = st.text_input("C/C", "20-5")
 
-if st.button("🚀 Gerar Texto do Relatório", type="primary"):
-    with st.spinner("Buscando e processando os dados... (Isso pode levar um momento)"):
+if st.button("🚀 Gerar Relatório", type="primary"):
+    with st.spinner("Buscando e processando dados de todas as APIs... Este é o momento da verdade!"):
+        # Busca em todas as APIs necessárias
         endpoint_transacoes = f"transacoes?TransacaoSearch[data_cadastro]={data_inicio.strftime('%d/%m/%Y')} - {data_fim.strftime('%d/%m/%Y')}"
-        dados_transacoes, erro_transacoes = buscar_dados_api(token, endpoint_transacoes)
+        dados_faturas, erro_faturas = buscar_dados_api(token, "fatura-recebimentos?expand=cliente,configuracao.faturamentoTipo,grupo.grupo,status")
         dados_empenhos, erro_empenhos = buscar_dados_api(token, "empenhos?expand=contrato.empresa,grupo")
-        if erro_transacoes:
-            st.error(erro_transacoes)
-        elif erro_empenhos:
-            st.error(erro_empenhos)
+        dados_transacoes, erro_transacoes = buscar_dados_api(token, endpoint_transacoes)
+        dados_contratos, erro_contratos = buscar_dados_api(token, "contratos")
+
+        # Verifica todos os erros antes de prosseguir
+        erros = [e for e in [erro_faturas, erro_empenhos, erro_transacoes, erro_contratos] if e]
+        if erros:
+            for erro in erros:
+                st.error(erro)
         else:
-            mapa_empenhos, nomes_empenhos_api = mapear_empenhos(dados_empenhos)
-            dados_agrupados = processar_dados_para_relatorio(dados_transacoes, nome_cliente)
-            if not dados_agrupados:
-                st.warning(f"Nenhuma transação encontrada para o cliente '{nome_cliente}' no período selecionado.")
+            # Filtra faturas pelo cliente principal
+            faturas_filtradas = [f for f in dados_faturas if cliente_principal.upper() in f.get('cliente',{}).get('nome','').upper()]
+            
+            dados_finais = processar_dados_completos(faturas_filtradas, dados_empenhos, dados_transacoes, dados_contratos)
+            
+            if not dados_finais:
+                st.warning(f"Nenhuma fatura encontrada para o cliente '{cliente_principal}'.")
             else:
-                st.success(f"Dados processados! {len(dados_agrupados)} secretarias encontradas.")
+                st.success(f"Dados processados! {len(dados_finais)} relatórios gerados.")
                 st.markdown("---")
                 st.subheader("3. Resultado Final")
-                secretarias_sem_empenho = []
-                for secretaria_original, dados in sorted(dados_agrupados.items()):
-                    secretaria_normalizada = normalizar_texto(secretaria_original)
-                    empenho_automatico = mapa_empenhos.get(secretaria_normalizada)
-                    if not empenho_automatico:
-                        # Busca pelo nome original no dicionário de mapeamento
-                        nome_mapeado = MAPEAMENTO_SECRETARIAS.get(secretaria_original)
-                        if nome_mapeado:
-                            empenho_automatico = mapa_empenhos.get(normalizar_texto(nome_mapeado))
-                    if not empenho_automatico:
-                        empenho_automatico = "EMPENHO NÃO ENCONTRADO"
-                        if secretaria_original != "Secretaria Não Informada":
-                            secretarias_sem_empenho.append(secretaria_original)
+
+                texto_completo_para_download = ""
+
+                for secretaria_original, dados in sorted(dados_finais.items()):
                     inputs_manuais = {
-                        "contrato": contrato, "secretaria_nome": secretaria_original,
-                        "periodo": periodo, "vencimento": vencimento.strftime('%d/%m/%Y'),
-                        "banco": banco, "agencia": agencia, "conta": conta,
-                        "cnpj": cnpj, "nome_empresa": nome_empresa,
-                        "termo_contrato": termo_contrato,
+                        "secretaria_nome": secretaria_original, "banco": banco, 
+                        "agencia": agencia, "conta": conta, "cnpj": cnpj, 
+                        "nome_empresa": nome_empresa, "termo_contrato": termo_contrato,
                     }
-                    texto_gerado = gerar_texto_relatorio(dados, inputs_manuais, empenho_automatico)
+                    texto_gerado = gerar_texto_relatorio(dados, inputs_manuais)
+                    texto_completo_para_download += texto_gerado + "\n\n"
+                    
                     st.markdown(f"#### {secretaria_original}")
-                    if empenho_automatico == "EMPENHO NÃO ENCONTRADO":
+                    if "NÃO ENCONTRADO" in texto_gerado:
                         st.warning(texto_gerado)
                     else:
                         st.code(texto_gerado, language=None)
-                if secretarias_sem_empenho:
-                    st.markdown("---")
-                    with st.expander("⚠️ AJUDA: Corrigir Empenhos Não Encontrados"):
-                        st.error("As seguintes secretarias não encontraram um empenho correspondente:")
-                        col_debug1, col_debug2 = st.columns(2)
-                        with col_debug1:
-                            st.write("**Nomes na API de Transações (copie daqui):**")
-                            st.json(secretarias_sem_empenho)
-                        with col_debug2:
-                            st.write("**Nomes disponíveis na API de Empenhos (cole aqui):**")
-                            st.json(sorted(nomes_empenhos_api))
-                        st.info("Para corrigir, adicione a correspondência no dicionário `MAPEAMENTO_SECRETARIAS` no início do script.")
+                
+                st.download_button(
+                    label="📥 Baixar Relatório Completo (.txt)",
+                    data=texto_completo_para_download.encode('utf-8'),
+                    file_name=f"Relatorio_{cliente_principal}_{hoje.strftime('%Y-%m-%d')}.txt",
+                    mime='text/plain'
+                )
 
