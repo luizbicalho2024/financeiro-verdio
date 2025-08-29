@@ -1,4 +1,4 @@
-# pages/8_Relatorio_API.py
+# pages/8_Relatorio_API.py (ou 3_Relatorio_SUGESP.py)
 import sys
 import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -266,10 +266,7 @@ if st.button("🚀 Gerar Texto do Relatório", type="primary"):
                     empenho_automatico = mapa_empenhos.get(secretaria_normalizada)
                     if not empenho_automatico:
                         # Busca pelo nome original no dicionário de mapeamento
-                        # >>> CORREÇÃO APLICADA AQUI <<<
-                        # Converte a secretaria para maiúsculas antes de buscar no dicionário,
-                        # garantindo que a busca funcione independentemente do case.
-                        nome_mapeado = MAPEAMENTO_SECRETARIAS.get(secretaria_original.upper())
+                        nome_mapeado = MAPEAMENTO_SECRETARIAS.get(secretaria_original)
                         if nome_mapeado:
                             empenho_automatico = mapa_empenhos.get(normalizar_texto(nome_mapeado))
                     if not empenho_automatico:
@@ -301,3 +298,4 @@ if st.button("🚀 Gerar Texto do Relatório", type="primary"):
                             st.write("**Nomes disponíveis na API de Empenhos (cole aqui):**")
                             st.json(sorted(nomes_empenhos_api))
                         st.info("Para corrigir, adicione a correspondência no dicionário `MAPEAMENTO_SECRETARIAS` no início do script.")
+
