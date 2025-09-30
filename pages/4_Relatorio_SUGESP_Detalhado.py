@@ -87,12 +87,20 @@ def buscar_transacoes_em_partes(token, data_inicio, data_fim, chunk_days=7):
 
 def processar_relatorio_com_base_nas_transacoes(faturas, transacoes, empenhos, contratos, produtos, dados_bancarios, info_empresa, data_inicio, taxa_adicional, vencimento_manual):
     """
-    LÓGICA AJUSTADA: Gera relatórios com base nas transações, aplicando taxa mas sem exibi-la explicitamente.
+    LÓGICA AJUSTADA: Gera relatórios com o mês em português.
     """
     mapa_produtos = {p['id']: p['nome'] for p in produtos}
     mapa_contratos = {c['id']: c for c in contratos}
     mapa_empenhos = {e['id']: e['numero_empenho'] for e in empenhos}
     relatorios_finais = []
+    
+    # Dicionário para tradução dos meses
+    meses_pt = {
+        "January": "Janeiro", "February": "Fevereiro", "March": "Março",
+        "April": "Abril", "May": "Maio", "June": "Junho",
+        "July": "Julho", "August": "Agosto", "September": "Setembro",
+        "October": "Outubro", "November": "Novembro", "December": "Dezembro"
+    }
 
     CNPJ_PRINCIPAL = "03693136000112"
 
@@ -126,7 +134,11 @@ def processar_relatorio_com_base_nas_transacoes(faturas, transacoes, empenhos, c
             return []
         vencimento = datetime.strptime(fatura_geral['liquidacao_prevista'], '%Y-%m-%d %H:%M:%S').strftime('%d/%m/%Y')
         
-    periodo = data_inicio.strftime('%B/%Y').capitalize()
+    # Formata o período com o mês em português
+    mes_en = data_inicio.strftime('%B')
+    ano = data_inicio.strftime('%Y')
+    mes_pt_nome = meses_pt.get(mes_en, mes_en) # Usa o nome em inglês como fallback
+    periodo = f"{mes_pt_nome.capitalize()}/{ano}"
 
     for nome_secretaria, transacoes_da_secretaria in secretarias.items():
         valor_bruto = sum(float(t.get('valor_total', 0)) for t in transacoes_da_secretaria)
@@ -171,7 +183,6 @@ def processar_relatorio_com_base_nas_transacoes(faturas, transacoes, empenhos, c
             numero_contrato = mapa_contratos[contrato_id_transacao].get('numero', 'N/A')
         objeto_contrato = f"(Termo Contrato nº {numero_contrato})."
 
-        # A linha da "Taxa Adicional" foi removida desta string final
         texto_relatorio = (
             f"({nome_secretaria}) | "
             f"Valor Bruto: R$ {valor_bruto:,.2f} | "
