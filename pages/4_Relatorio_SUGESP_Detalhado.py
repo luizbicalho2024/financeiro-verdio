@@ -34,6 +34,21 @@ if st.sidebar.button("Logout"):
 
 # --- 2. FUNÇÕES DE LÓGICA ---
 
+def get_secretarias_df():
+    """
+    Retorna um DataFrame do Pandas com a lista fixa de secretarias.
+    """
+    data = {
+        'ID': [457, 463, 442, 447, 454, 451, 467, 460, 437, 462, 459, 441, 450, 461, 446, 465, 470, 449, 445, 464, 456, 440, 444, 468, 436, 453, 452, 455, 448, 466, 458, 438, 443, 439, 471, 469],
+        'CNPJ': ['26766814000125', '12443392000142', '07864604000125', '15883796000145', '02328663000165', '10631265000100', '10762839000181', '01046465000190', '00394573000138', '11123237000170', '07824639000130', '05939228000149', '09285427000155', '04478496000109', '15139042000115', '09165342000199', '05462520000120', '08947849000114', '0441829000114', '04418471000175', '03092697000166', '37621806000107', '07172665000121'],
+        'Nome Fantasia': ['IDEP', 'PROLEITE', 'AGEVISA/RO', 'DETRAN', 'FEPRAM', 'FITHA', 'AGERO/RO', 'SEPAT', 'CBMRO', 'PC RO', 'SEGEP', 'CASA CIVIL', 'SUDER', 'EMATER', 'DER', 'FAPERO', 'SEFIN', 'JUCER', 'CGE', 'CMR', 'IDARON', 'SEOSP', 'SEJUS', 'SESDEC', 'PMRO', 'SESAU/RO', 'SEPOG', 'SEAGRI', 'IPEM', 'SEDUC', 'SUDEL', 'CASA MILITAR', 'CMR', 'IDARON', 'SEOSP', 'SEJUS'],
+    }
+    # Para simplificar, as outras colunas não são essenciais para a lógica principal
+    # e podem ser omitidas ou preenchidas com valores padrão se necessário.
+    df = pd.DataFrame(data)
+    return df
+
+
 @st.cache_data(ttl=300)
 def buscar_dados_api(token, endpoint):
     """Função genérica para buscar dados de um endpoint da API."""
@@ -174,7 +189,7 @@ def processar_relatorio_detalhado(df_secretarias, faturas, transacoes, empenhos,
 
 # --- 3. INTERFACE DA PÁGINA ---
 st.title("📑 Gerador de Relatório Detalhado - SUGESP")
-st.markdown("Gere relatórios detalhados para cada secretaria vinculada ao cliente SUGESP.")
+st.markdown("Gere relatórios detalhados para as secretarias vinculadas ao cliente SUGESP.")
 st.markdown("---")
 
 # --- INPUTS DO USUÁRIO ---
@@ -186,8 +201,6 @@ with col1:
     data_inicio = st.date_input("🗓️ Data de Início (para transações)", datetime.now().replace(day=1) - timedelta(days=30))
 with col2:
     data_fim = st.date_input("🗓️ Data de Fim (para transações)", datetime.now())
-
-uploaded_file = st.file_uploader("📂 Carregue o arquivo de Secretarias (CSV)", type=['csv'])
 
 st.markdown("---")
 st.subheader("2. Informações Manuais (Padrão)")
@@ -205,11 +218,9 @@ with col_b:
 if st.button("🚀 Gerar Relatórios", type="primary"):
     if not token:
         st.error("O token de autenticação é obrigatório.")
-    elif not uploaded_file:
-        st.error("Por favor, carregue o arquivo CSV com a lista de secretarias.")
     else:
-        # Carrega o CSV das secretarias
-        df_secretarias = pd.read_csv(uploaded_file)
+        # Carrega o DataFrame fixo das secretarias
+        df_secretarias = get_secretarias_df()
         
         # Busca de dados da API
         with st.spinner("Buscando dados da API... Isso pode levar alguns minutos."):
