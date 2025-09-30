@@ -201,28 +201,28 @@ def create_pdf_report(nome_cliente, periodo, totais, df_cheio, df_ativados, df_d
             pdf.set_font("Arial", "B", 7)
             header = [h for h in available_cols if h in df.columns]
             
-            # --- LÓGICA CORRIGIDA PARA DESENHAR CABEÇALHO ALINHADO ---
-            header_row_height = 8  # Altura fixa para a linha do cabeçalho (suficiente para 2 linhas de texto)
+            header_row_height = 8
             y_start = pdf.get_y()
             x_start = pdf.get_x()
 
-            # 1. Desenha as células de borda com altura uniforme
+            # 1. Desenha as células de borda
             for h in header:
                 width = col_widths.get(h, 20)
                 pdf.cell(width, header_row_height, '', border=1, ln=0, align='C')
             
-            # 2. Insere o texto multi-linha sobre as células já desenhadas
-            pdf.set_xy(x_start, y_start) # Retorna ao início da linha
+            # 2. Insere o texto, gerenciando a posição manualmente
+            pdf.set_xy(x_start, y_start) 
+            current_x = x_start
             for h in header:
                 width = col_widths.get(h, 20)
                 header_text = header_map.get(h, h)
+                pdf.set_x(current_x) # Define a posição X exata
                 pdf.multi_cell(width, 4, header_text, border=0, align='C')
-                # Move para a próxima posição de célula na mesma linha
-                pdf.set_xy(pdf.get_x() + width, y_start)
+                current_x += width # Atualiza a posição para a próxima célula
+                pdf.set_y(y_start) # Reseta a posição Y para a mesma linha
 
-            pdf.set_y(y_start + header_row_height) # Move o cursor para baixo da linha do cabeçalho
+            pdf.set_y(y_start + header_row_height)
             
-            # Desenha linhas de dados
             pdf.set_font("Arial", "", 6)
             for _, row in df.iterrows():
                 for h in header:
