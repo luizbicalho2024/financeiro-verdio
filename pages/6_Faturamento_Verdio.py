@@ -9,6 +9,7 @@ from datetime import datetime
 import io
 import user_management_db as umdb
 from fpdf import FPDF
+import locale # <-- 1. IMPORTA A BIBLIOTECA LOCALE
 
 # --- CLASSE PARA GERAR PDF COM IDENTIDADE VISUAL (VERSÃO FINAL) ---
 class PDF(FPDF):
@@ -79,6 +80,13 @@ def processar_planilha_faturamento(file_bytes, valor_gprs, valor_satelital):
     Lê a planilha, extrai informações, classifica, calcula e retorna os dataframes de faturamento.
     """
     try:
+        # --- 2. CONFIGURA O LOCALE PARA PORTUGUÊS DO BRASIL ---
+        try:
+            locale.setlocale(locale.LC_TIME, 'pt_BR.UTF-8')
+        except locale.Error:
+            # Fallback para o locale padrão do sistema caso 'pt_BR' não esteja disponível
+            locale.setlocale(locale.LC_TIME, '')
+
         uploaded_file = io.BytesIO(file_bytes)
         df = pd.read_excel(uploaded_file, header=11, engine='openpyxl', dtype={'Equipamento': str})
         df = df.rename(columns={'Suspenso Dias Mês': 'Suspenso Dias Mes', 'Equipamento': 'Nº Equipamento'})
@@ -106,7 +114,9 @@ def processar_planilha_faturamento(file_bytes, valor_gprs, valor_satelital):
         report_month = report_date.month
         report_year = report_date.year
         dias_no_mes = pd.Timestamp(year=report_year, month=report_month, day=1).days_in_month
-        periodo_relatorio = report_date.strftime("%B de %Y")
+        
+        # Agora esta linha irá gerar o mês em português
+        periodo_relatorio = report_date.strftime("%B de %Y").capitalize()
 
         df['Tipo'] = df['Nº Equipamento'].apply(lambda x: 'Satelital' if len(str(x).strip()) == 8 else 'GPRS')
         df['Valor Unitario'] = df['Tipo'].apply(lambda x: valor_satelital if x == 'Satelital' else valor_gprs)
@@ -240,7 +250,6 @@ def create_pdf_report(nome_cliente, periodo, totais, df_cheio, df_ativados, df_d
     cols_desativados = ['Terminal', 'Nº Equipamento', 'Placa', 'Tipo', 'Data Desativação', 'Dias Ativos Mês', 'Suspenso Dias Mes', 'Dias a Faturar', 'Valor Unitario', 'Valor a Faturar']
     draw_table("Detalhamento Proporcional (Desativações no Mês)", df_desativados, widths_proporcional, cols_desativados)
 
-    # --- NOVO BLOCO PARA TERMINAIS SUSPENSOS ---
     widths_suspensos = {'Terminal': 40, 'Nº Equipamento': 40, 'Placa': 40, 'Tipo': 25, 'Data Ativação': 25, 'Suspenso Dias Mes': 20}
     cols_suspensos = list(widths_suspensos.keys())
     draw_table("Detalhamento dos Terminais Suspensos", df_suspensos, widths_suspensos, cols_suspensos)
@@ -315,7 +324,6 @@ if uploaded_file:
                 "terminais_cheio": len(df_cheio), "terminais_proporcional": len(df_ativados) + len(df_desativados),
                 "terminais_suspensos": len(df_suspensos), "terminais_gprs": total_gprs, "terminais_satelitais": total_satelital
             }
-            # Atualiza a chamada da função para incluir o dataframe de suspensos
             pdf_data = create_pdf_report(nome_cliente, periodo_relatorio, totais_pdf, df_cheio, df_ativados, df_desativados, df_suspensos)
             faturamento_data_log = {
                 "cliente": nome_cliente, "periodo_relatorio": periodo_relatorio,
