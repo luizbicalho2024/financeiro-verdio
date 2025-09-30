@@ -92,6 +92,7 @@ def buscar_transacoes_em_partes(token, data_inicio, data_fim, chunk_days=8):
     progress_bar.empty()
     return todas_transacoes, None
 
+
 def processar_dados_completos(dados_faturas, dados_empenhos, dados_transacoes, dados_contratos):
     """
     Orquestra o processamento e cruzamento de todas as fontes de dados.
@@ -107,7 +108,6 @@ def processar_dados_completos(dados_faturas, dados_empenhos, dados_transacoes, d
             mapa_empenhos[e['grupo_id']].append(e['numero_empenho'])
 
     df_transacoes = pd.json_normalize(dados_transacoes)
-    # CORREÇÃO: Lógica mais robusta para obter o ID da unidade (grupo) da transação
     df_transacoes['grupo_id'] = df_transacoes['informacao.search.subgrupo.id'].fillna(df_transacoes['informacao.search.grupo.id'])
     df_transacoes.rename(columns={
         'informacao.produto.nome': 'Produto',
@@ -121,12 +121,16 @@ def processar_dados_completos(dados_faturas, dados_empenhos, dados_transacoes, d
     relatorios_finais = {}
     
     for fatura in dados_faturas:
-        # CORREÇÃO: Pega o ID da unidade diretamente do objeto 'grupo' aninhado, que é mais confiável.
-        grupo_id = fatura.get('grupo', {}).get('id')
+        # CORREÇÃO: Verifica se o objeto 'grupo' existe e é um dicionário antes de acessá-lo
+        grupo_obj = fatura.get('grupo')
+        if not grupo_obj or not isinstance(grupo_obj, dict):
+            continue
+
+        grupo_id = grupo_obj.get('id')
         if not grupo_id:
             continue
             
-        secretaria_nome = fatura.get('grupo', {}).get('nome', 'Secretaria Desconhecida')
+        secretaria_nome = grupo_obj.get('nome', 'Secretaria Desconhecida')
         
         data_inicio_apuracao = pd.to_datetime(fatura['inicio_apuracao']).date()
         data_fim_apuracao = pd.to_datetime(fatura['fim_apuracao']).date()
@@ -229,7 +233,7 @@ with col_b:
 if st.button("🚀 Gerar Relatório", type="primary"):
     
     st.info("Buscando dados de faturas, empenhos e contratos...")
-    dados_faturas, erro_faturas = buscar_dados_api(token, "fatura-recebimentos?expand=cliente,configuracao.faturamentoTipo,grupo.grupo,status")
+    dados_faturas, erro_faturas = buscar_dados_api(token, "fatura-recebimentos?expand=cliente,configuracao.faturamentoTipo,grupo")
     dados_empenhos, erro_empenhos = buscar_dados_api(token, "empenhos?expand=contrato.empresa,grupo")
     dados_contratos, erro_contratos = buscar_dados_api(token, "contratos")
     
