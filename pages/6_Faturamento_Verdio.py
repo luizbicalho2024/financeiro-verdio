@@ -201,18 +201,28 @@ def create_pdf_report(nome_cliente, periodo, totais, df_cheio, df_ativados, df_d
             pdf.set_font("Arial", "B", 7)
             header = [h for h in available_cols if h in df.columns]
             
-            line_height = 4 
+            # --- LÓGICA CORRIGIDA PARA DESENHAR CABEÇALHO ALINHADO ---
+            header_row_height = 8  # Altura fixa para a linha do cabeçalho (suficiente para 2 linhas de texto)
             y_start = pdf.get_y()
+            x_start = pdf.get_x()
+
+            # 1. Desenha as células de borda com altura uniforme
+            for h in header:
+                width = col_widths.get(h, 20)
+                pdf.cell(width, header_row_height, '', border=1, ln=0, align='C')
+            
+            # 2. Insere o texto multi-linha sobre as células já desenhadas
+            pdf.set_xy(x_start, y_start) # Retorna ao início da linha
             for h in header:
                 width = col_widths.get(h, 20)
                 header_text = header_map.get(h, h)
-                x = pdf.get_x()
-                # CORREÇÃO: Removido o parâmetro 'ln' incorreto.
-                pdf.multi_cell(width, line_height, header_text, border=1, align='C')
-                pdf.set_y(y_start)
-                pdf.set_x(x + width)
-            pdf.ln(line_height * 2)
+                pdf.multi_cell(width, 4, header_text, border=0, align='C')
+                # Move para a próxima posição de célula na mesma linha
+                pdf.set_xy(pdf.get_x() + width, y_start)
 
+            pdf.set_y(y_start + header_row_height) # Move o cursor para baixo da linha do cabeçalho
+            
+            # Desenha linhas de dados
             pdf.set_font("Arial", "", 6)
             for _, row in df.iterrows():
                 for h in header:
@@ -232,7 +242,7 @@ def create_pdf_report(nome_cliente, periodo, totais, df_cheio, df_ativados, df_d
         'Valor a Faturar': 'Valor a\nFaturar',
         'Data Ativação': 'Data\nAtivação',
         'Data Desativação': 'Data\nDesativação',
-        'Dias Ativos Mês': 'Dias\nAtivos Mês',
+        'Dias Ativos Mês': 'Dias Ativos\nMês',
         'Suspenso Dias Mes': 'Dias\nSuspensos',
         'Dias a Faturar': 'Dias a\nFaturar',
         'Valor Unitario': 'Valor\nUnitário'
