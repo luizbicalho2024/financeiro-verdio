@@ -21,9 +21,8 @@ class PDF(FPDF):
         """
         try:
             page_width = self.w - self.l_margin - self.r_margin
-            # Desenha a imagem do cabeçalho
             self.image("imgs/header1.png", x=self.l_margin, y=8, w=page_width)
-            # A posição do conteúdo abaixo é gerenciada pela margem superior do documento
+            self.ln(30)
         except Exception:
             self.set_font("Arial", "B", 20)
             self.cell(0, 10, "Uzzipay Soluções", 0, 1, "L")
@@ -34,7 +33,6 @@ class PDF(FPDF):
         Adiciona o rodapé com as informações da empresa em todas as páginas.
         """
         try:
-            # Posiciona o rodapé um pouco mais para cima para evitar cortes
             self.set_y(-35)
             page_width = self.w - self.l_margin - self.r_margin
             self.image("imgs/footer1.png", x=self.l_margin, y=self.get_y(), w=page_width)
@@ -130,11 +128,12 @@ def processar_planilha_faturamento(file_bytes, valor_gprs, valor_satelital):
         if not df_ativados.empty:
             df_ativados['Dias a Faturar'] = ((dias_no_mes - df_ativados['Data Ativação'].dt.day + 1) - df_ativados['Suspenso Dias Mes']).clip(lower=0)
             df_ativados['Valor a Faturar'] = (df_ativados['Valor Unitario'] / dias_no_mes) * df_ativados['Dias a Faturar']
-
+        
         df_suspensos = df_restantes[df_restantes['Condição'].str.strip() == 'Suspenso'].copy()
         if not df_suspensos.empty:
-            df_suspensos['Dias a Faturar'] = 0
-            df_suspensos['Valor a Faturar'] = 0
+            # CORREÇÃO: Fatura os dias ativos dos terminais suspensos
+            df_suspensos['Dias a Faturar'] = (df_suspensos['Dias Ativos Mês'] - df_suspensos['Suspenso Dias Mes']).clip(lower=0)
+            df_suspensos['Valor a Faturar'] = (df_suspensos['Valor Unitario'] / dias_no_mes) * df_suspensos['Dias a Faturar']
 
         indices_para_remover = df_ativados.index.union(df_suspensos.index)
         df_cheio = df_restantes.drop(indices_para_remover).copy()
@@ -153,12 +152,11 @@ def to_excel(df_cheio, df_ativados, df_desativados, df_suspensos):
         df_cheio.to_excel(writer, index=False, sheet_name='Faturamento Cheio')
         df_ativados.to_excel(writer, index=False, sheet_name='Proporcional - Ativados')
         df_desativados.to_excel(writer, index=False, sheet_name='Proporcional - Desativados')
-        df_suspensos.to_excel(writer, index=False, sheet_name='Terminais Suspensos')
+        df_suspensos.to_excel(writer, index=False, sheet_name='Suspensos (Faturamento Prop.)')
     return output.getvalue()
 
 def create_pdf_report(nome_cliente, periodo, totais, df_cheio, df_ativados, df_desativados, df_suspensos):
     pdf = PDF(orientation='P')
-    # Define as margens superior e inferior para evitar sobreposição
     pdf.set_top_margin(40)
     pdf.set_auto_page_break(auto=True, margin=40)
     pdf.add_page()
@@ -265,7 +263,7 @@ def create_pdf_report(nome_cliente, periodo, totais, df_cheio, df_ativados, df_d
     cols_desativados = ['Terminal', 'Nº Equipamento', 'Placa', 'Tipo', 'Data Desativação', 'Dias Ativos Mês', 'Suspenso Dias Mes', 'Dias a Faturar', 'Valor Unitario', 'Valor a Faturar']
     draw_table("Detalhamento Proporcional (Desativações no Mês)", df_desativados, widths_proporcional, cols_desativados, header_map)
 
-    widths_suspensos = {'Terminal': 40, 'Nº Equipamento': 40, 'Placa': 40, 'Tipo': 25, 'Data Ativação': 25, 'Suspenso Dias Mes': 20}
+    widths_suspensos = {'Terminal': 25, 'Nº Equipamento': 30, 'Placa': 25, 'Tipo': 20, 'Data Ativação': 25, 'Dias Ativos Mês': 20, 'Suspenso Dias Mes': 25, 'Dias a Faturar': 20, 'Valor Unitario': 30, 'Valor a Faturar': 30}
     cols_suspensos = list(widths_suspensos.keys())
     draw_table("Detalhamento dos Terminais Suspensos", df_suspensos, widths_suspensos, cols_suspensos, header_map)
     
@@ -330,7 +328,10 @@ if uploaded_file:
             total_faturamento_cheio = df_cheio['Valor a Faturar'].sum() if not df_cheio.empty else 0
             total_faturamento_ativados = df_ativados['Valor a Faturar'].sum() if not df_ativados.empty else 0
             total_faturamento_desativados = df_desativados['Valor a Faturar'].sum() if not df_desativados.empty else 0
-            faturamento_proporcional_total = total_faturamento_ativados + total_faturamento_desativados
+            total_faturamento_suspensos = df_suspensos['Valor a Faturar'].sum() if not df_suspensos.empty else 0
+            
+            # CORREÇÃO: Faturamento dos suspensos agora entra no total proporcional
+            faturamento_proporcional_total = total_faturamento_ativados + total_faturamento_desativados + total_faturamento_suspensos
             faturamento_total_geral = total_faturamento_cheio + faturamento_proporcional_total
 
             st.header("Resumo do Faturamento")
@@ -344,7 +345,7 @@ if uploaded_file:
             col1, col2, col3, col4, col5 = st.columns(5)
             col1.metric("Nº Fat. Cheio", value=len(df_cheio))
             col2.metric("Nº Fat. Proporcional", value=len(df_ativados) + len(df_desativados))
-            col3.metric("Nº Suspensos", value=len(df_suspensos))
+            col3.metric("Nº Suspensos", value=len(df_suspensos)) # Contagem continua separada
             col4.metric("Total GPRS", value=total_gprs)
             col5.metric("Total Satelitais", value=total_satelital)
 
@@ -391,10 +392,11 @@ if uploaded_file:
                 )
 
             st.markdown("---")
-
-            with st.expander("Detalhamento dos Terminais Suspensos"):
+            
+            # CORREÇÃO: Mostra as colunas calculadas para os suspensos
+            with st.expander("Detalhamento dos Terminais Suspensos (Faturamento Proporcional)"):
                 if not df_suspensos.empty:
-                    st.dataframe(df_suspensos[['Terminal', 'Nº Equipamento', 'Placa', 'Tipo', 'Data Ativação', 'Dias Ativos Mês', 'Suspenso Dias Mes']], use_container_width=True, hide_index=True)
+                    st.dataframe(df_suspensos[['Terminal', 'Nº Equipamento', 'Placa', 'Tipo', 'Data Ativação', 'Dias Ativos Mês', 'Suspenso Dias Mes', 'Dias a Faturar', 'Valor Unitario', 'Valor a Faturar']], use_container_width=True, hide_index=True)
                 else:
                     st.info("Nenhum terminal suspenso neste período.")
 
