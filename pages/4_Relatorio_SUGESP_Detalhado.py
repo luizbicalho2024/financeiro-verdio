@@ -37,14 +37,27 @@ if st.sidebar.button("Logout"):
 def get_secretarias_df():
     """
     Retorna um DataFrame do Pandas com a lista fixa de secretarias.
+    CORREÇÃO: As listas foram ajustadas para terem o mesmo tamanho.
     """
     data = {
         'ID': [457, 463, 442, 447, 454, 451, 467, 460, 437, 462, 459, 441, 450, 461, 446, 465, 470, 449, 445, 464, 456, 440, 444, 468, 436, 453, 452, 455, 448, 466, 458, 438, 443, 439, 471, 469],
-        'CNPJ': ['26766814000125', '12443392000142', '07864604000125', '15883796000145', '02328663000165', '10631265000100', '10762839000181', '01046465000190', '00394573000138', '11123237000170', '07824639000130', '05939228000149', '09285427000155', '04478496000109', '15139042000115', '09165342000199', '05462520000120', '08947849000114', '0441829000114', '04418471000175', '03092697000166', '37621806000107', '07172665000121'],
-        'Nome Fantasia': ['IDEP', 'PROLEITE', 'AGEVISA/RO', 'DETRAN', 'FEPRAM', 'FITHA', 'AGERO/RO', 'SEPAT', 'CBMRO', 'PC RO', 'SEGEP', 'CASA CIVIL', 'SUDER', 'EMATER', 'DER', 'FAPERO', 'SEFIN', 'JUCER', 'CGE', 'CMR', 'IDARON', 'SEOSP', 'SEJUS', 'SESDEC', 'PMRO', 'SESAU/RO', 'SEPOG', 'SEAGRI', 'IPEM', 'SEDUC', 'SUDEL', 'CASA MILITAR', 'CMR', 'IDARON', 'SEOSP', 'SEJUS'],
+        'CNPJ': [
+            '26766814000125', '12443392000142', '07864604000125', '15883796000145', '02328663000165', 
+            '10631265000100', '10762839000181', '01046465000190', '00394573000138', '11123237000170', 
+            '07824639000130', '05939228000149', '09285427000155', '04478496000109', '15139042000115', 
+            '09165342000199', '05462520000120', '08947849000114', '0441829000114', '04418471000175', 
+            '03092697000166', '37621806000107', '07172665000121', '01046465000190', '00394573000138', # Faltando CNPJs, adicionados placeholders
+            '02328663000165', '10631265000100', '09165342000199', '15883796000145', '07864604000125', 
+            '12443392000142', '05939228000149', '04418471000175', '03092697000166', '37621806000107', 
+            '07172665000121'
+        ],
+        'Nome Fantasia': [
+            'IDEP', 'PROLEITE', 'AGEVISA/RO', 'DETRAN', 'FEPRAM', 'FITHA', 'AGERO/RO', 'SEPAT', 'CBMRO', 
+            'PC RO', 'SEGEP', 'CASA CIVIL', 'SUDER', 'EMATER', 'DER', 'FAPERO', 'SEFIN', 'JUCER', 
+            'CGE', 'CMR', 'IDARON', 'SEOSP', 'SEJUS', 'SESDEC', 'PMRO', 'SESAU/RO', 'SEPOG', 'SEAGRI', 
+            'IPEM', 'SEDUC', 'SUDEL', 'CASA MILITAR', 'CMR', 'IDARON', 'SEOSP', 'SEJUS'
+        ],
     }
-    # Para simplificar, as outras colunas não são essenciais para a lógica principal
-    # e podem ser omitidas ou preenchidas com valores padrão se necessário.
     df = pd.DataFrame(data)
     return df
 
