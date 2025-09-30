@@ -70,7 +70,6 @@ def processar_planilha_faturamento(file_bytes, valor_gprs, valor_satelital):
     Lê a planilha, extrai informações, classifica, calcula e retorna os dataframes de faturamento.
     """
     try:
-        # --- DICIONÁRIO PARA TRADUÇÃO MANUAL DOS MESES ---
         meses_pt = {
             "January": "Janeiro", "February": "Fevereiro", "March": "Março",
             "April": "Abril", "May": "Maio", "June": "Junho",
@@ -102,9 +101,8 @@ def processar_planilha_faturamento(file_bytes, valor_gprs, valor_satelital):
         else:
             report_date = datetime.now()
         
-        # --- LÓGICA DE TRADUÇÃO DO MÊS ---
         mes_ingles = report_date.strftime("%B")
-        mes_portugues = meses_pt.get(mes_ingles, mes_ingles) # Usa o dicionário
+        mes_portugues = meses_pt.get(mes_ingles, mes_ingles)
         ano = report_date.strftime("%Y")
         periodo_relatorio = f"{mes_portugues} de {ano}"
 
@@ -196,15 +194,26 @@ def create_pdf_report(nome_cliente, periodo, totais, df_cheio, df_ativados, df_d
     pdf.cell(0, 10, f"FATURAMENTO TOTAL: R$ {totais['geral']:,.2f}", 1, 1, "C")
     pdf.ln(10)
 
-    def draw_table(title, df, col_widths, available_cols):
+    def draw_table(title, df, col_widths, available_cols, header_map):
         if not df.empty:
             pdf.set_font("Arial", "B", 12)
             pdf.cell(0, 10, title, 0, 1, "L")
             pdf.set_font("Arial", "B", 7)
             header = [h for h in available_cols if h in df.columns]
+            
+            # Desenha cabeçalho com multi_cell para quebra de linha
+            line_height = 4 
+            y_start = pdf.get_y()
             for h in header:
-                pdf.cell(col_widths.get(h, 20), 7, h, 1, 0, 'C')
-            pdf.ln()
+                width = col_widths.get(h, 20)
+                header_text = header_map.get(h, h)
+                x = pdf.get_x()
+                pdf.multi_cell(width, line_height, header_text, border=1, align='C', ln=3)
+                pdf.set_y(y_start)
+                pdf.set_x(x + width)
+            pdf.ln(line_height * 2)
+
+            # Desenha linhas de dados
             pdf.set_font("Arial", "", 6)
             for _, row in df.iterrows():
                 for h in header:
@@ -219,9 +228,20 @@ def create_pdf_report(nome_cliente, periodo, totais, df_cheio, df_ativados, df_d
                 pdf.ln()
             pdf.ln(5)
 
+    header_map = {
+        'Nº Equipamento': 'Nº\nEquipamento',
+        'Valor a Faturar': 'Valor a\nFaturar',
+        'Data Ativação': 'Data\nAtivação',
+        'Data Desativação': 'Data\nDesativação',
+        'Dias Ativos Mês': 'Dias\nAtivos Mês',
+        'Suspenso Dias Mes': 'Dias\nSuspensos',
+        'Dias a Faturar': 'Dias a\nFaturar',
+        'Valor Unitario': 'Valor\nUnitário'
+    }
+
     widths_cheio = {'Terminal': 45, 'Nº Equipamento': 45, 'Placa': 40, 'Tipo': 25, 'Valor a Faturar': 35}
     cols_cheio = list(widths_cheio.keys())
-    draw_table("Detalhamento do Faturamento Cheio", df_cheio, widths_cheio, cols_cheio)
+    draw_table("Detalhamento do Faturamento Cheio", df_cheio, widths_cheio, cols_cheio, header_map)
     
     widths_proporcional = {
         'Terminal': 22, 'Nº Equipamento': 22, 'Placa': 22, 'Tipo': 15, 'Data Ativação': 18, 
@@ -229,14 +249,14 @@ def create_pdf_report(nome_cliente, periodo, totais, df_cheio, df_ativados, df_d
         'Dias a Faturar': 15, 'Valor Unitario': 20, 'Valor a Faturar': 20
     }
     cols_ativados = ['Terminal', 'Nº Equipamento', 'Placa', 'Tipo', 'Data Ativação', 'Dias Ativos Mês', 'Suspenso Dias Mes', 'Dias a Faturar', 'Valor Unitario', 'Valor a Faturar']
-    draw_table("Detalhamento Proporcional (Ativações no Mês)", df_ativados, widths_proporcional, cols_ativados)
+    draw_table("Detalhamento Proporcional (Ativações no Mês)", df_ativados, widths_proporcional, cols_ativados, header_map)
     
     cols_desativados = ['Terminal', 'Nº Equipamento', 'Placa', 'Tipo', 'Data Desativação', 'Dias Ativos Mês', 'Suspenso Dias Mes', 'Dias a Faturar', 'Valor Unitario', 'Valor a Faturar']
-    draw_table("Detalhamento Proporcional (Desativações no Mês)", df_desativados, widths_proporcional, cols_desativados)
+    draw_table("Detalhamento Proporcional (Desativações no Mês)", df_desativados, widths_proporcional, cols_desativados, header_map)
 
     widths_suspensos = {'Terminal': 40, 'Nº Equipamento': 40, 'Placa': 40, 'Tipo': 25, 'Data Ativação': 25, 'Suspenso Dias Mes': 20}
     cols_suspensos = list(widths_suspensos.keys())
-    draw_table("Detalhamento dos Terminais Suspensos", df_suspensos, widths_suspensos, cols_suspensos)
+    draw_table("Detalhamento dos Terminais Suspensos", df_suspensos, widths_suspensos, cols_suspensos, header_map)
     
     return bytes(pdf.output(dest='S').encode('latin-1'))
 
