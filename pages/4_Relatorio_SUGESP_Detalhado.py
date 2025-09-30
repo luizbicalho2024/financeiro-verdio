@@ -37,7 +37,8 @@ if st.sidebar.button("Logout"):
 def get_secretarias_df():
     """
     Retorna um DataFrame do Pandas com a lista fixa de secretarias.
-    CORREÇÃO: As listas foram ajustadas para terem o mesmo tamanho.
+    ATENÇÃO: Os nomes em 'Nome Fantasia' devem corresponder EXATAMENTE
+    aos nomes de grupo retornados pela API.
     """
     data = {
         'ID': [457, 463, 442, 447, 454, 451, 467, 460, 437, 462, 459, 441, 450, 461, 446, 465, 470, 449, 445, 464, 456, 440, 444, 468, 436, 453, 452, 455, 448, 466, 458, 438, 443, 439, 471, 469],
@@ -46,7 +47,7 @@ def get_secretarias_df():
             '10631265000100', '10762839000181', '01046465000190', '00394573000138', '11123237000170', 
             '07824639000130', '05939228000149', '09285427000155', '04478496000109', '15139042000115', 
             '09165342000199', '05462520000120', '08947849000114', '0441829000114', '04418471000175', 
-            '03092697000166', '37621806000107', '07172665000121', '01046465000190', '00394573000138', # Faltando CNPJs, adicionados placeholders
+            '03092697000166', '37621806000107', '07172665000121', '01046465000190', '00394573000138',
             '02328663000165', '10631265000100', '09165342000199', '15883796000145', '07864604000125', 
             '12443392000142', '05939228000149', '04418471000175', '03092697000166', '37621806000107', 
             '07172665000121'
@@ -116,31 +117,23 @@ def buscar_transacoes_em_partes(token, data_inicio, data_fim, chunk_days=7):
 def processar_relatorio_detalhado(df_secretarias, faturas, transacoes, empenhos, contratos, produtos, dados_bancarios, info_empresa):
     """Orquestra a geração dos relatórios detalhados para cada secretaria."""
     
-    # Mapeamentos para acesso rápido
     mapa_produtos = {p['id']: p['nome'] for p in produtos}
     mapa_contratos = {c['id']: c for c in contratos}
     mapa_empenhos = {e['id']: e['numero_empenho'] for e in empenhos}
     
     relatorios_finais = []
-
-    # Cliente principal
     CNPJ_PRINCIPAL = "03693136000112"
-    
-    # Filtra faturas do cliente principal (SUGESP)
     faturas_sugesp = [f for f in faturas if f.get('cliente') and f['cliente']['cnpj'] == CNPJ_PRINCIPAL]
 
     for _, row in df_secretarias.iterrows():
-        nome_secretaria = row['Nome Fantasia']
+        nome_secretaria = row['Nome Fantasia'].strip()
         
-        # Encontra a fatura correspondente à secretaria (grupo)
-        fatura_secretaria = next((f for f in faturas_sugesp if f.get('grupo') and f['grupo']['nome'] == nome_secretaria), None)
+        fatura_secretaria = next((f for f in faturas_sugesp if f.get('grupo') and f['grupo']['nome'].strip() == nome_secretaria), None)
         
         if not fatura_secretaria:
             continue
 
         grupo_id = fatura_secretaria['grupo']['id']
-        
-        # Dados da fatura
         valor_bruto = float(fatura_secretaria.get('valor_bruto', 0))
         valor_liquido = float(fatura_secretaria.get('valor_liquido', 0))
         ir_retido = float(fatura_secretaria.get('imposto_renda', 0))
@@ -148,39 +141,31 @@ def processar_relatorio_detalhado(df_secretarias, faturas, transacoes, empenhos,
         periodo = datetime.strptime(fatura_secretaria['inicio_apuracao'], '%Y-%m-%d %H:%M:%S').strftime('%B/%Y').capitalize()
         vencimento = datetime.strptime(fatura_secretaria['liquidacao_prevista'], '%Y-%m-%d %H:%M:%S').strftime('%d/%m/%Y')
         
-        # Filtra transações da secretaria
         transacoes_da_secretaria = [t for t in transacoes if t.get('informacao', {}).get('grupo', {}).get('id') == grupo_id]
         
-        # Agrega consumo por produto
         consumo_por_produto = defaultdict(lambda: {'valor_bruto': 0.0, 'irrf': 0.0})
         empenhos_usados_ids = set()
         
         for t in transacoes_da_secretaria:
-            produto_id = t['produto_id']
-            produto_nome = mapa_produtos.get(produto_id, "Desconhecido")
+            produto_nome = mapa_produtos.get(t['produto_id'], "Desconhecido")
             consumo_por_produto[produto_nome]['valor_bruto'] += float(t.get('valor_total', 0))
             consumo_por_produto[produto_nome]['irrf'] += float(t.get('imposto_renda', 0))
             if t.get('empenho_id'):
                 empenhos_usados_ids.add(t['empenho_id'])
         
-        # Formata o detalhamento do consumo
-        partes_consumo = []
-        for produto, valores in consumo_por_produto.items():
-            partes_consumo.append(
-                f"Combustível: {produto} | Valor Bruto: R$ {valores['valor_bruto']:,.2f} | Soma de VLR IRRF: R$ {valores['irrf']:,.2f}"
-            )
+        partes_consumo = [
+            f"Combustível: {produto} | Valor Bruto: R$ {valores['valor_bruto']:,.2f} | Soma de VLR IRRF: R$ {valores['irrf']:,.2f}"
+            for produto, valores in consumo_por_produto.items()
+        ]
         consumo_str = " | ".join(partes_consumo)
 
-        # Busca os números dos empenhos
         empenhos_str = ", ".join(sorted([mapa_empenhos[eid] for eid in empenhos_usados_ids if eid in mapa_empenhos])) or "N/A"
         
-        # Objeto do Contrato
         contrato_id_fatura = fatura_secretaria.get('configuracao', {}).get('contrato_id')
         contrato_obj = mapa_contratos.get(contrato_id_fatura, {})
         numero_contrato = contrato_obj.get('numero', 'N/A')
         objeto_contrato = f"(Termo Contrato nº {numero_contrato})."
 
-        # Monta a string final do relatório
         texto_relatorio = (
             f"({nome_secretaria}) | "
             f"Valor Bruto: R$ {valor_bruto:,.2f} | "
@@ -205,7 +190,6 @@ st.title("📑 Gerador de Relatório Detalhado - SUGESP")
 st.markdown("Gere relatórios detalhados para as secretarias vinculadas ao cliente SUGESP.")
 st.markdown("---")
 
-# --- INPUTS DO USUÁRIO ---
 st.subheader("1. Configurações da Consulta")
 token = st.text_input("🔑 Token de Autenticação da API", type="password", help="Insira seu token Bearer para acessar os dados.")
 
@@ -232,10 +216,8 @@ if st.button("🚀 Gerar Relatórios", type="primary"):
     if not token:
         st.error("O token de autenticação é obrigatório.")
     else:
-        # Carrega o DataFrame fixo das secretarias
         df_secretarias = get_secretarias_df()
         
-        # Busca de dados da API
         with st.spinner("Buscando dados da API... Isso pode levar alguns minutos."):
             faturas = buscar_dados_api(token, "fatura-recebimentos?expand=cliente,configuracao.faturamentoTipo,grupo")
             empenhos = buscar_dados_api(token, "empenhos?expand=contrato.empresa,grupo")
@@ -245,7 +227,36 @@ if st.button("🚀 Gerar Relatórios", type="primary"):
 
         if all(data is not None for data in [faturas, empenhos, contratos, produtos, transacoes]):
             st.success("Todos os dados foram carregados com sucesso!")
-            
+
+            # --- SEÇÃO DE DIAGNÓSTICO ---
+            with st.expander("🔎 Verificação de Nomes das Secretarias (Diagnóstico)"):
+                CNPJ_PRINCIPAL = "03693136000112"
+                faturas_sugesp = [f for f in faturas if f.get('cliente') and f['cliente']['cnpj'] == CNPJ_PRINCIPAL]
+                
+                nomes_api = {f['grupo']['nome'].strip() for f in faturas_sugesp if f.get('grupo') and f['grupo'].get('nome')}
+                nomes_script = {nome.strip() for nome in df_secretarias['Nome Fantasia'].unique()}
+                
+                col_api, col_script = st.columns(2)
+                with col_api:
+                    st.markdown("##### Nomes de Grupos encontrados na API")
+                    st.dataframe(sorted(list(nomes_api)), use_container_width=True)
+                with col_script:
+                    st.markdown("##### Nomes de Secretarias no Script")
+                    st.dataframe(sorted(list(nomes_script)), use_container_width=True)
+
+                nao_encontrados_na_api = nomes_script - nomes_api
+                nao_usados_no_script = nomes_api - nomes_script
+
+                if nao_encontrados_na_api:
+                    st.warning("Os seguintes nomes do script não foram encontrados nas faturas da API. Verifique se estão escritos corretamente:")
+                    st.json(sorted(list(nao_encontrados_na_api)))
+                if nao_usados_no_script:
+                    st.info("Os seguintes nomes da API não estão na lista do script. Considere adicioná-los se necessário:")
+                    st.json(sorted(list(nao_usados_no_script)))
+                if not nao_encontrados_na_api and not nao_usados_no_script:
+                    st.success("✅ Todos os nomes do script correspondem aos nomes encontrados na API!")
+
+            # --- GERAÇÃO DOS RELATÓRIOS ---
             with st.spinner("Processando e gerando os relatórios..."):
                 dados_bancarios = {"banco": banco, "agencia": agencia, "conta": conta}
                 info_empresa = {"nome": nome_empresa, "cnpj": cnpj_empresa}
@@ -259,11 +270,12 @@ if st.button("🚀 Gerar Relatórios", type="primary"):
             st.subheader("3. Relatórios Gerados")
 
             if not relatorios:
-                st.warning("Nenhum relatório pôde ser gerado. Verifique se há faturas para as secretarias no período selecionado.")
+                st.warning("Nenhum relatório foi gerado. Verifique o painel de diagnóstico acima para encontrar possíveis divergências de nomes.")
             else:
+                st.success(f"{len(relatorios)} relatórios gerados com sucesso!")
                 texto_completo_download = ""
                 for rel in relatorios:
-                    secretaria_nome = rel.split('|')[0].strip()[1:-1] # Extrai o nome da secretaria
+                    secretaria_nome = rel.split('|')[0].strip()[1:-1]
                     st.markdown(f"#### {secretaria_nome}")
                     st.code(rel, language=None)
                     texto_completo_download += rel + "\n\n"
