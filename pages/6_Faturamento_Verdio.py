@@ -9,7 +9,6 @@ from datetime import datetime
 import io
 import user_management_db as umdb
 from fpdf import FPDF
-import locale # <-- IMPORTA A BIBLIOTECA LOCALE
 
 # --- CLASSE PARA GERAR PDF COM IDENTIDADE VISUAL (VERSÃO FINAL) ---
 class PDF(FPDF):
@@ -21,15 +20,10 @@ class PDF(FPDF):
         Adiciona o cabeçalho com o logo da Uzzipay Soluções em todas as páginas.
         """
         try:
-            # Largura da página menos as margens
             page_width = self.w - self.l_margin - self.r_margin
-            # Adiciona a imagem do cabeçalho preenchendo a largura da página vertical
-            # A altura é calculada automaticamente para manter a proporção.
             self.image("imgs/header1.png", x=self.l_margin, y=8, w=page_width)
-            # Adiciona um espaço vertical após o cabeçalho
             self.ln(30)
         except Exception:
-            # Fallback caso a imagem não seja encontrada
             self.set_font("Arial", "B", 20)
             self.cell(0, 10, "Uzzipay Soluções", 0, 1, "L")
             self.ln(15)
@@ -39,14 +33,10 @@ class PDF(FPDF):
         Adiciona o rodapé com as informações da empresa em todas as páginas.
         """
         try:
-            # Posiciona o cursor a 3 cm da parte inferior da página
             self.set_y(-30)
             page_width = self.w - self.l_margin - self.r_margin
-            # Adiciona a imagem do rodapé preenchendo a largura da página
-            # A altura é calculada automaticamente para manter a proporção.
             self.image("imgs/footer1.png", x=self.l_margin, y=self.get_y(), w=page_width)
         except Exception:
-            # Fallback caso a imagem não seja encontrada
             self.set_y(-15)
             self.set_font("Arial", "I", 8)
             self.cell(0, 10, f"Página {self.page_no()}", 0, 0, "C")
@@ -80,12 +70,13 @@ def processar_planilha_faturamento(file_bytes, valor_gprs, valor_satelital):
     Lê a planilha, extrai informações, classifica, calcula e retorna os dataframes de faturamento.
     """
     try:
-        # --- CONFIGURA O LOCALE PARA PORTUGUÊS DO BRASIL ---
-        try:
-            locale.setlocale(locale.LC_TIME, 'pt_BR.UTF-8')
-        except locale.Error:
-            # Fallback para o locale padrão do sistema caso 'pt_BR' não esteja disponível
-            locale.setlocale(locale.LC_TIME, '')
+        # --- DICIONÁRIO PARA TRADUÇÃO MANUAL DOS MESES ---
+        meses_pt = {
+            "January": "Janeiro", "February": "Fevereiro", "March": "Março",
+            "April": "Abril", "May": "Maio", "June": "Junho",
+            "July": "Julho", "August": "Agosto", "September": "Setembro",
+            "October": "Outubro", "November": "Novembro", "December": "Dezembro"
+        }
 
         uploaded_file = io.BytesIO(file_bytes)
         df = pd.read_excel(uploaded_file, header=11, engine='openpyxl', dtype={'Equipamento': str})
@@ -110,13 +101,16 @@ def processar_planilha_faturamento(file_bytes, valor_gprs, valor_satelital):
             report_date = df[df['Data Ativação'].notna()]['Data Ativação'].iloc[0]
         else:
             report_date = datetime.now()
+        
+        # --- LÓGICA DE TRADUÇÃO DO MÊS ---
+        mes_ingles = report_date.strftime("%B")
+        mes_portugues = meses_pt.get(mes_ingles, mes_ingles) # Usa o dicionário
+        ano = report_date.strftime("%Y")
+        periodo_relatorio = f"{mes_portugues} de {ano}"
 
         report_month = report_date.month
         report_year = report_date.year
         dias_no_mes = pd.Timestamp(year=report_year, month=report_month, day=1).days_in_month
-        
-        # Agora esta linha irá gerar o mês em português
-        periodo_relatorio = report_date.strftime("%B de %Y").capitalize()
 
         df['Tipo'] = df['Nº Equipamento'].apply(lambda x: 'Satelital' if len(str(x).strip()) == 8 else 'GPRS')
         df['Valor Unitario'] = df['Tipo'].apply(lambda x: valor_satelital if x == 'Satelital' else valor_gprs)
@@ -163,9 +157,8 @@ def to_excel(df_cheio, df_ativados, df_desativados, df_suspensos):
     return output.getvalue()
 
 def create_pdf_report(nome_cliente, periodo, totais, df_cheio, df_ativados, df_desativados, df_suspensos):
-    # Utiliza a nova classe PDF com orientação VERTICAL ('P')
     pdf = PDF(orientation='P')
-    pdf.set_auto_page_break(auto=True, margin=35) # Margem inferior para o rodapé
+    pdf.set_auto_page_break(auto=True, margin=35)
     pdf.add_page()
     
     pdf.set_font("Arial", "B", 16)
@@ -177,9 +170,7 @@ def create_pdf_report(nome_cliente, periodo, totais, df_cheio, df_ativados, df_d
     pdf.cell(0, 8, f"Período: {periodo}", 0, 1, "L")
     pdf.ln(5)
 
-    # Tabela de Resumo Superior
     pdf.set_font("Arial", "B", 9)
-    # Largura total da página - margens
     table_width = pdf.w - pdf.l_margin - pdf.r_margin
     col_width = table_width / 5
     pdf.cell(col_width, 8, "Nº Fat. Cheio", 1, 0, "C")
@@ -195,7 +186,6 @@ def create_pdf_report(nome_cliente, periodo, totais, df_cheio, df_ativados, df_d
     pdf.cell(col_width, 8, str(totais['terminais_satelitais']), 1, 1, "C")
     pdf.ln(5)
 
-    # Tabela de Faturamento
     pdf.set_font("Arial", "B", 11)
     pdf.cell(table_width / 2, 8, "Faturamento (Cheio)", 1, 0, "C")
     pdf.cell(table_width / 2, 8, "Faturamento (Proporcional)", 1, 1, "C")
@@ -210,16 +200,11 @@ def create_pdf_report(nome_cliente, periodo, totais, df_cheio, df_ativados, df_d
         if not df.empty:
             pdf.set_font("Arial", "B", 12)
             pdf.cell(0, 10, title, 0, 1, "L")
-            # Reduz o tamanho da fonte para as tabelas detalhadas
             pdf.set_font("Arial", "B", 7)
-
             header = [h for h in available_cols if h in df.columns]
-
             for h in header:
                 pdf.cell(col_widths.get(h, 20), 7, h, 1, 0, 'C')
             pdf.ln()
-
-            # Reduz o tamanho da fonte para o conteúdo da tabela
             pdf.set_font("Arial", "", 6)
             for _, row in df.iterrows():
                 for h in header:
@@ -234,7 +219,6 @@ def create_pdf_report(nome_cliente, periodo, totais, df_cheio, df_ativados, df_d
                 pdf.ln()
             pdf.ln(5)
 
-    # Larguras das colunas ajustadas para a página vertical (~190mm de largura útil)
     widths_cheio = {'Terminal': 45, 'Nº Equipamento': 45, 'Placa': 40, 'Tipo': 25, 'Valor a Faturar': 35}
     cols_cheio = list(widths_cheio.keys())
     draw_table("Detalhamento do Faturamento Cheio", df_cheio, widths_cheio, cols_cheio)
