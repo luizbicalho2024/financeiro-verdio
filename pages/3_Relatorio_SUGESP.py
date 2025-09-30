@@ -41,7 +41,8 @@ def buscar_dados_api(token, endpoint):
     headers = {"Authorization": f"Bearer {token}"}
     url = f"https://sigyo.uzzipay.com/api/{endpoint}"
     try:
-        response = requests.get(url, headers=headers, timeout=60)
+        # Aumentado o tempo de espera para 120 segundos (2 minutos)
+        response = requests.get(url, headers=headers, timeout=120)
         response.raise_for_status()
         return response.json(), None
     except requests.exceptions.HTTPError as err:
@@ -56,16 +57,13 @@ def processar_dados_completos(dados_faturas, dados_empenhos, dados_transacoes, d
     if not dados_faturas:
         return {}
 
-    # Mapeia contratos para busca rápida por ID
     mapa_contratos = {c['id']: c.get('numero', 'N/A') for c in dados_contratos if 'id' in c}
     
-    # Mapeia múltiplos empenhos para cada grupo_id
     mapa_empenhos = defaultdict(list)
     for e in dados_empenhos:
         if 'grupo_id' in e and e.get('numero_empenho'):
             mapa_empenhos[e['grupo_id']].append(e['numero_empenho'])
 
-    # Processa transações para detalhamento de consumo
     df_transacoes = pd.json_normalize(dados_transacoes)
     df_transacoes.rename(columns={
         'informacao.search.subgrupo.id': 'grupo_id',
@@ -86,7 +84,6 @@ def processar_dados_completos(dados_faturas, dados_empenhos, dados_transacoes, d
             
         secretaria_nome = fatura.get('grupo', {}).get('grupo', {}).get('nome', 'Secretaria Desconhecida')
         
-        # Filtra transações para o grupo_id e período da fatura
         data_inicio_apuracao = pd.to_datetime(fatura['inicio_apuracao']).date()
         data_fim_apuracao = pd.to_datetime(fatura['fim_apuracao']).date()
         
@@ -104,12 +101,10 @@ def processar_dados_completos(dados_faturas, dados_empenhos, dados_transacoes, d
         contrato_id_fatura = fatura.get('configuracao', {}).get('contrato_id')
         numero_contrato = mapa_contratos.get(contrato_id_fatura, "NÃO ENCONTRADO")
 
-        # Garante que os valores numéricos sejam tratados corretamente
         valor_bruto = float(fatura.get('valor_bruto', 0))
         valor_liquido = float(fatura.get('valor_liquido', 0))
         ir_retido = float(fatura.get('imposto_renda', 0))
 
-        # Junta os números de empenho em uma única string
         empenhos_str = ", ".join(mapa_empenhos.get(grupo_id, ["NÃO ENCONTRADO"]))
 
         relatorios_finais[secretaria_nome] = {
@@ -130,8 +125,6 @@ def processar_dados_completos(dados_faturas, dados_empenhos, dados_transacoes, d
 
 def gerar_texto_relatorio(dados_secretaria, inputs_manuais):
     """Monta a string final para uma secretaria específica no novo formato."""
-    
-    # Monta a parte principal do relatório
     partes_principais = [
         f"({dados_secretaria['Secretaria']})",
         f"Valor Bruto: R$ {dados_secretaria['Valor Bruto']:,.2f}",
@@ -147,7 +140,6 @@ def gerar_texto_relatorio(dados_secretaria, inputs_manuais):
         "VALOR DA CORRETAGEM OU COMISSÃO: ZERO - CONFORME LEI COMPLEMENTAR 878/2021, Art. 260"
     ]
     
-    # Monta o detalhamento de consumo
     partes_consumo = []
     for produto, valor_bruto in dados_secretaria['Consumo Bruto'].items():
         valor_ir = dados_secretaria['Consumo IR'].get(produto, 0)
@@ -155,7 +147,6 @@ def gerar_texto_relatorio(dados_secretaria, inputs_manuais):
             f"Combustível: {produto} | Valor Bruto: R$ {valor_bruto:,.2f} | Soma de VLR IRRF: R$ {valor_ir:,.2f}"
         )
 
-    # Junta tudo em uma única string
     relatorio_completo = " | ".join(partes_principais) + " | " + " | ".join(partes_consumo)
     
     return relatorio_completo
@@ -190,8 +181,7 @@ with col_b:
     conta = st.text_input("C/C", "20-5")
 
 if st.button("🚀 Gerar Relatório", type="primary"):
-    with st.spinner("Buscando e processando dados de todas as APIs..."):
-        # Busca em todas as APIs necessárias
+    with st.spinner("Buscando e processando dados de todas as APIs... (Isso pode levar até 2 minutos)"):
         endpoint_transacoes = f"transacoes?TransacaoSearch[data_cadastro]={data_inicio.strftime('%d/%m/%Y')} - {data_fim.strftime('%d/%m/%Y')}"
         dados_faturas, erro_faturas = buscar_dados_api(token, "fatura-recebimentos?expand=cliente,configuracao.faturamentoTipo,grupo.grupo,status")
         dados_empenhos, erro_empenhos = buscar_dados_api(token, "empenhos?expand=contrato.empresa,grupo")
