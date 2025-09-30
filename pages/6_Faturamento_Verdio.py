@@ -10,7 +10,7 @@ import io
 import user_management_db as umdb
 from fpdf import FPDF
 
-# --- CLASSE PARA GERAR PDF COM IDENTIDADE VISUAL (AJUSTADA) ---
+# --- CLASSE PARA GERAR PDF COM IDENTIDADE VISUAL (AJUSTADA NOVAMENTE) ---
 class PDF(FPDF):
     """
     Classe customizada para gerar PDFs com cabeçalho e rodapé padrão da Uzzipay.
@@ -20,12 +20,11 @@ class PDF(FPDF):
         Adiciona o cabeçalho com o logo da Uzzipay Soluções em todas as páginas.
         """
         try:
-            page_width = self.w - 2 * self.l_margin
-            # Adiciona a imagem do cabeçalho especificando apenas a largura.
-            # A altura será calculada automaticamente para manter a proporção.
-            self.image("imgs/header1.png", x=self.l_margin, y=8, w=page_width)
-            # Adiciona um espaço vertical após o cabeçalho
-            self.ln(30)
+            # Define uma ALTURA fixa para a imagem do cabeçalho (ex: 20mm).
+            # A largura será calculada automaticamente para manter a proporção.
+            self.image("imgs/header1.png", x=self.l_margin, y=10, h=20)
+            # Ajusta o espaço vertical para o conteúdo começar logo abaixo do cabeçalho.
+            self.ln(25)
         except Exception:
             # Fallback caso a imagem não seja encontrada
             self.set_font("Arial", "B", 20)
@@ -37,12 +36,11 @@ class PDF(FPDF):
         Adiciona o rodapé com as informações da empresa em todas as páginas.
         """
         try:
-            # Posiciona o cursor a 3 cm da parte inferior da página
-            self.set_y(-30)
-            page_width = self.w - 2 * self.l_margin
-            # Adiciona a imagem do rodapé especificando apenas a largura.
-            # A altura será calculada automaticamente para manter a proporção.
-            self.image("imgs/footer1.png", x=self.l_margin, y=self.get_y(), w=page_width)
+            # Posiciona o cursor para o rodapé
+            self.set_y(-25)
+            # Define uma ALTURA fixa para a imagem do rodapé (ex: 15mm).
+            # A largura será calculada automaticamente para manter a proporção.
+            self.image("imgs/footer1.png", x=self.l_margin, y=self.get_y(), h=15)
         except Exception:
             # Fallback caso a imagem não seja encontrada
             self.set_y(-15)
@@ -154,7 +152,7 @@ def to_excel(df_cheio, df_ativados, df_desativados, df_suspensos):
 def create_pdf_report(nome_cliente, periodo, totais, df_cheio, df_ativados, df_desativados):
     # Utiliza a nova classe PDF com cabeçalho e rodapé automáticos
     pdf = PDF(orientation='L')
-    pdf.set_auto_page_break(auto=True, margin=35) # Margem inferior para o rodapé
+    pdf.set_auto_page_break(auto=True, margin=30) # Margem inferior para o rodapé
     pdf.add_page()
     
     # O cabeçalho é adicionado automaticamente pelo método header() da classe PDF
