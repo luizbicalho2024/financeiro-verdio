@@ -279,19 +279,15 @@ st.markdown("---")
 st.sidebar.header("Valores de Faturamento")
 pricing_config = umdb.get_pricing_config()
 
-# Define os valores padrão, usando o session_state se um botão foi clicado para aplicar valores anteriores
-default_gprs = st.session_state.get('gprs_value_to_apply', float(pricing_config.get("PRECOS_PF", {}).get("GPRS / Gsm", 0.0)))
-default_satelital = st.session_state.get('satelital_value_to_apply', float(pricing_config.get("PLANOS_PJ", {}).get("36 Meses", {}).get("Satélite", 0.0)))
+# Define os valores iniciais dos widgets apenas se eles não existirem no estado da sessão
+if 'gprs_input' not in st.session_state:
+    st.session_state.gprs_input = float(pricing_config.get("PRECOS_PF", {}).get("GPRS / Gsm", 0.0))
+if 'satelital_input' not in st.session_state:
+    st.session_state.satelital_input = float(pricing_config.get("PLANOS_PJ", {}).get("36 Meses", {}).get("Satélite", 0.0))
 
-valor_gprs = st.sidebar.number_input("Valor Unitário Mensal (GPRS)", min_value=0.0, value=default_gprs, step=1.0, format="%.2f", key="gprs_input")
-valor_satelital = st.sidebar.number_input("Valor Unitário Mensal (Satelital)", min_value=0.0, value=default_satelital, step=1.0, format="%.2f", key="satelital_input")
-
-# Limpa o session_state para não aplicar os valores novamente em re-runs indesejados
-if 'gprs_value_to_apply' in st.session_state:
-    del st.session_state['gprs_value_to_apply']
-if 'satelital_value_to_apply' in st.session_state:
-    del st.session_state['satelital_value_to_apply']
-
+# Os widgets usarão automaticamente os valores de st.session_state por causa da 'key'
+valor_gprs = st.sidebar.number_input("Valor Unitário Mensal (GPRS)", min_value=0.0, step=1.0, format="%.2f", key="gprs_input")
+valor_satelital = st.sidebar.number_input("Valor Unitário Mensal (Satelital)", min_value=0.0, step=1.0, format="%.2f", key="satelital_input")
 
 # --- 5. UPLOAD DO FICHEIRO ---
 st.subheader("Carregamento do Relatório de Terminais")
@@ -316,16 +312,18 @@ if uploaded_file:
                 last_gprs = last_billing.get("valor_unitario_gprs", valor_gprs)
                 last_satelital = last_billing.get("valor_unitario_satelital", valor_satelital)
 
-                if last_gprs != valor_gprs or last_satelital != valor_satelital:
+                # Compara com os valores atuais nos widgets
+                if last_gprs != st.session_state.gprs_input or last_satelital != st.session_state.satelital_input:
                     st.info(f"💡 Encontramos os valores utilizados no último faturamento para **{nome_cliente}**.")
                     col1, col2, col3 = st.columns([2,2,3])
                     col1.metric("Último Valor GPRS", f"R$ {last_gprs:.2f}")
                     col2.metric("Último Valor Satelital", f"R$ {last_satelital:.2f}")
                     with col3:
-                        st.write("") # Espaçador
+                        st.write("") 
                         if st.button("Aplicar valores e recalcular"):
-                            st.session_state['gprs_value_to_apply'] = last_gprs
-                            st.session_state['satelital_value_to_apply'] = last_satelital
+                            # CORREÇÃO: Atualiza o estado do widget diretamente pela sua chave
+                            st.session_state.gprs_input = last_gprs
+                            st.session_state.satelital_input = last_satelital
                             st.rerun()
             # --- FIM DA LÓGICA ---
 
