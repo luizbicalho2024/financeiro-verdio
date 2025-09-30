@@ -1,4 +1,4 @@
-# pages/8_Relatorio_API.py
+# pages/3_Relatorio_SUGESP.py
 import sys
 import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -7,13 +7,13 @@ import streamlit as st
 import pandas as pd
 import requests
 from datetime import datetime, timedelta
-import unicodedata
+from collections import defaultdict
 import io
 
 # --- 1. CONFIGURAÇÃO DA PÁGINA E AUTENTICAÇÃO ---
 st.set_page_config(
     layout="wide",
-    page_title="Gerador de Relatório de Faturamento",
+    page_title="Gerador de Relatório SUGESP",
     page_icon="✍️"
 )
 
@@ -52,15 +52,19 @@ def buscar_dados_api(token, endpoint):
 def processar_dados_completos(dados_faturas, dados_empenhos, dados_transacoes, dados_contratos):
     """
     Orquestra o processamento e cruzamento de todas as fontes de dados.
-    A fonte da verdade são as faturas de recebimento.
     """
     if not dados_faturas:
         return {}
 
-    # Mapeia contratos e empenhos para busca rápida por ID
+    # Mapeia contratos para busca rápida por ID
     mapa_contratos = {c['id']: c.get('numero', 'N/A') for c in dados_contratos if 'id' in c}
-    mapa_empenhos = {e['grupo_id']: e.get('numero_empenho', 'NÃO ENCONTRADO') for e in dados_empenhos if 'grupo_id' in e}
     
+    # Mapeia múltiplos empenhos para cada grupo_id
+    mapa_empenhos = defaultdict(list)
+    for e in dados_empenhos:
+        if 'grupo_id' in e and e.get('numero_empenho'):
+            mapa_empenhos[e['grupo_id']].append(e['numero_empenho'])
+
     # Processa transações para detalhamento de consumo
     df_transacoes = pd.json_normalize(dados_transacoes)
     df_transacoes.rename(columns={
@@ -94,8 +98,8 @@ def processar_dados_completos(dados_faturas, dados_empenhos, dados_transacoes, d
             (df_transacoes['data_cadastro_dt'] <= data_fim_apuracao)
         ]
         
-        consumo = transacoes_secretaria.groupby('Produto')['Valor Bruto'].sum().round(2).to_dict()
-        ir_por_item = transacoes_secretaria.groupby('Produto')['IR Retido'].sum().round(2).to_dict()
+        consumo_bruto = transacoes_secretaria.groupby('Produto')['Valor Bruto'].sum().round(2).to_dict()
+        consumo_ir = transacoes_secretaria.groupby('Produto')['IR Retido'].sum().round(2).to_dict()
 
         contrato_id_fatura = fatura.get('configuracao', {}).get('contrato_id')
         numero_contrato = mapa_contratos.get(contrato_id_fatura, "NÃO ENCONTRADO")
@@ -105,28 +109,31 @@ def processar_dados_completos(dados_faturas, dados_empenhos, dados_transacoes, d
         valor_liquido = float(fatura.get('valor_liquido', 0))
         ir_retido = float(fatura.get('imposto_renda', 0))
 
+        # Junta os números de empenho em uma única string
+        empenhos_str = ", ".join(mapa_empenhos.get(grupo_id, ["NÃO ENCONTRADO"]))
+
         relatorios_finais[secretaria_nome] = {
+            "Secretaria": secretaria_nome,
             "Valor Bruto": valor_bruto,
             "Taxa Negativa": round(valor_bruto - valor_liquido, 2),
             "Valor Liquido": valor_liquido,
             "IR Retido": ir_retido,
             "Período": f"{datetime.strptime(fatura['inicio_apuracao'], '%Y-%m-%d %H:%M:%S').strftime('%B/%Y').capitalize()}",
             "Vencimento": datetime.strptime(fatura['liquidacao_prevista'], '%Y-%m-%d %H:%M:%S').strftime('%d/%m/%Y'),
-            "Empenho": mapa_empenhos.get(grupo_id, "NÃO ENCONTRADO"),
+            "Empenho": empenhos_str,
             "Numero Contrato": numero_contrato,
-            "Consumo": consumo,
-            "IR por Item": ir_por_item
+            "Consumo Bruto": consumo_bruto,
+            "Consumo IR": consumo_ir
         }
         
     return relatorios_finais
 
 def gerar_texto_relatorio(dados_secretaria, inputs_manuais):
-    """Monta a string final para uma secretaria específica de forma robusta."""
-    consumo_str = ", ".join([f"{i+1}. {produto} R$ {valor:,.2f}" for i, (produto, valor) in enumerate(dados_secretaria['Consumo'].items())])
-    ir_item_str = "; ".join([f"{i+1} - IR R$ {valor:,.2f}" for i, (produto, valor) in enumerate(dados_secretaria['IR por Item'].items())])
+    """Monta a string final para uma secretaria específica no novo formato."""
     
-    partes = [
-        f"(CONTRATO nº {dados_secretaria['Numero Contrato']}/PGE-SUGESP – {inputs_manuais['secretaria_nome']})",
+    # Monta a parte principal do relatório
+    partes_principais = [
+        f"({dados_secretaria['Secretaria']})",
         f"Valor Bruto: R$ {dados_secretaria['Valor Bruto']:,.2f}",
         f"Taxa Negativa: -R$ {dados_secretaria['Taxa Negativa']:,.2f}",
         f"Valor Líquido: R$ {dados_secretaria['Valor Liquido']:,.2f}",
@@ -136,15 +143,26 @@ def gerar_texto_relatorio(dados_secretaria, inputs_manuais):
         f"Vencimento: {dados_secretaria['Vencimento']}",
         f"DADOS BANCÁRIOS: Banco {inputs_manuais['banco']} | Ag. {inputs_manuais['agencia']} | C/C {inputs_manuais['conta']}",
         f"CNPJ {inputs_manuais['cnpj']} – {inputs_manuais['nome_empresa']}",
-        f"Consumo: {consumo_str}",
-        f"(cada item: {ir_item_str})",
         f"Objeto: Prestação contínua de serviços de gerenciamento de abastecimento de combustíveis e ARLA em postos credenciados via sistema informatizado (Termo Contrato nº {inputs_manuais['termo_contrato']}).",
         "VALOR DA CORRETAGEM OU COMISSÃO: ZERO - CONFORME LEI COMPLEMENTAR 878/2021, Art. 260"
     ]
-    return " | ".join(partes)
+    
+    # Monta o detalhamento de consumo
+    partes_consumo = []
+    for produto, valor_bruto in dados_secretaria['Consumo Bruto'].items():
+        valor_ir = dados_secretaria['Consumo IR'].get(produto, 0)
+        partes_consumo.append(
+            f"Combustível: {produto} | Valor Bruto: R$ {valor_bruto:,.2f} | Soma de VLR IRRF: R$ {valor_ir:,.2f}"
+        )
+
+    # Junta tudo em uma única string
+    relatorio_completo = " | ".join(partes_principais) + " | " + " | ".join(partes_consumo)
+    
+    return relatorio_completo
+
 
 # --- 3. INTERFACE DA PÁGINA ---
-st.title("✍️ Gerador de Relatório de Faturamento")
+st.title("✍️ Gerador de Relatório de Faturamento - SUGESP")
 st.markdown("Gere o texto final para faturamento a partir das faturas do sistema.")
 st.markdown("---")
 
@@ -152,9 +170,8 @@ st.subheader("1. Parâmetros da Consulta")
 col1, col2 = st.columns(2)
 with col1:
     token = st.text_input("🔑 Token de Autenticação", type="password")
-    cliente_principal = st.text_input("👤 Cliente Principal (filtro inicial)", value="SUGESP")
+    cliente_principal = st.text_input("👤 Cliente Principal (filtro inicial)", value="SUPERINTENDENCIA DE GESTAO DOS GASTOS PUBLICOS ADMINISTRATIVOS")
 with col2:
-    # A data agora é apenas para o endpoint de transações
     hoje = datetime.now()
     inicio_mes_passado = (hoje.replace(day=1) - timedelta(days=1)).replace(day=1)
     data_inicio = st.date_input("🗓️ Data de Início (para filtro de consumo)", value=inicio_mes_passado)
@@ -173,7 +190,7 @@ with col_b:
     conta = st.text_input("C/C", "20-5")
 
 if st.button("🚀 Gerar Relatório", type="primary"):
-    with st.spinner("Buscando e processando dados de todas as APIs... Este é o momento da verdade!"):
+    with st.spinner("Buscando e processando dados de todas as APIs..."):
         # Busca em todas as APIs necessárias
         endpoint_transacoes = f"transacoes?TransacaoSearch[data_cadastro]={data_inicio.strftime('%d/%m/%Y')} - {data_fim.strftime('%d/%m/%Y')}"
         dados_faturas, erro_faturas = buscar_dados_api(token, "fatura-recebimentos?expand=cliente,configuracao.faturamentoTipo,grupo.grupo,status")
@@ -181,13 +198,11 @@ if st.button("🚀 Gerar Relatório", type="primary"):
         dados_transacoes, erro_transacoes = buscar_dados_api(token, endpoint_transacoes)
         dados_contratos, erro_contratos = buscar_dados_api(token, "contratos")
 
-        # Verifica todos os erros antes de prosseguir
         erros = [e for e in [erro_faturas, erro_empenhos, erro_transacoes, erro_contratos] if e]
         if erros:
             for erro in erros:
                 st.error(erro)
         else:
-            # Filtra faturas pelo cliente principal
             faturas_filtradas = [f for f in dados_faturas if cliente_principal.upper() in f.get('cliente',{}).get('nome','').upper()]
             
             dados_finais = processar_dados_completos(faturas_filtradas, dados_empenhos, dados_transacoes, dados_contratos)
@@ -203,23 +218,19 @@ if st.button("🚀 Gerar Relatório", type="primary"):
 
                 for secretaria_original, dados in sorted(dados_finais.items()):
                     inputs_manuais = {
-                        "secretaria_nome": secretaria_original, "banco": banco, 
-                        "agencia": agencia, "conta": conta, "cnpj": cnpj, 
-                        "nome_empresa": nome_empresa, "termo_contrato": termo_contrato,
+                        "banco": banco, "agencia": agencia, "conta": conta, 
+                        "cnpj": cnpj, "nome_empresa": nome_empresa, 
+                        "termo_contrato": termo_contrato,
                     }
                     texto_gerado = gerar_texto_relatorio(dados, inputs_manuais)
                     texto_completo_para_download += texto_gerado + "\n\n"
                     
                     st.markdown(f"#### {secretaria_original}")
-                    if "NÃO ENCONTRADO" in texto_gerado:
-                        st.warning(texto_gerado)
-                    else:
-                        st.code(texto_gerado, language=None)
+                    st.code(texto_gerado, language=None)
                 
                 st.download_button(
                     label="📥 Baixar Relatório Completo (.txt)",
                     data=texto_completo_para_download.encode('utf-8'),
-                    file_name=f"Relatorio_{cliente_principal}_{hoje.strftime('%Y-%m-%d')}.txt",
+                    file_name=f"Relatorio_{cliente_principal.replace(' ', '_')}_{hoje.strftime('%Y-%m-%d')}.txt",
                     mime='text/plain'
                 )
-
