@@ -10,6 +10,44 @@ import io
 import user_management_db as umdb
 from fpdf import FPDF
 
+# --- NOVA CLASSE PARA GERAR PDF COM IDENTIDADE VISUAL ---
+class PDF(FPDF):
+    """
+    Classe customizada para gerar PDFs com cabeçalho e rodapé padrão da Uzzipay.
+    """
+    def header(self):
+        """
+        Adiciona o cabeçalho com o logo da Uzzipay Soluções em todas as páginas.
+        """
+        try:
+            # Largura da página menos as margens
+            page_width = self.w - 2 * self.l_margin
+            # Adiciona a imagem do cabeçalho
+            self.image("imgs/header1.png", x=self.l_margin, y=8, w=page_width, h=25)
+            # Adiciona um espaço vertical após o cabeçalho
+            self.ln(30)
+        except Exception:
+            # Fallback caso a imagem não seja encontrada
+            self.set_font("Arial", "B", 20)
+            self.cell(0, 10, "Uzzipay Soluções", 0, 1, "L")
+            self.ln(15)
+
+    def footer(self):
+        """
+        Adiciona o rodapé com as informações da empresa em todas as páginas.
+        """
+        try:
+            # Posiciona o cursor a 3 cm da parte inferior da página
+            self.set_y(-30)
+            page_width = self.w - 2 * self.l_margin
+            # Adiciona a imagem do rodapé
+            self.image("imgs/footer1.png", x=self.l_margin, y=self.get_y(), w=page_width, h=20)
+        except Exception:
+            # Fallback caso a imagem não seja encontrada
+            self.set_y(-15)
+            self.set_font("Arial", "I", 8)
+            self.cell(0, 10, f"Página {self.page_no()}", 0, 0, "C")
+
 # --- 1. CONFIGURAÇÃO E AUTENTICAÇÃO ---
 st.set_page_config(
     layout="wide",
@@ -86,14 +124,12 @@ def processar_planilha_faturamento(file_bytes, valor_gprs, valor_satelital):
         if not df_ativados.empty:
             df_ativados['Dias a Faturar'] = ((dias_no_mes - df_ativados['Data Ativação'].dt.day + 1) - df_ativados['Suspenso Dias Mes']).clip(lower=0)
             df_ativados['Valor a Faturar'] = (df_ativados['Valor Unitario'] / dias_no_mes) * df_ativados['Dias a Faturar']
-        
-        # DataFrame para terminais suspensos
+
         df_suspensos = df_restantes[df_restantes['Condição'].str.strip() == 'Suspenso'].copy()
         if not df_suspensos.empty:
             df_suspensos['Dias a Faturar'] = 0
             df_suspensos['Valor a Faturar'] = 0
 
-        # Remove ativados e suspensos do df_restantes para obter o df_cheio
         indices_para_remover = df_ativados.index.union(df_suspensos.index)
         df_cheio = df_restantes.drop(indices_para_remover).copy()
         if not df_cheio.empty:
@@ -115,17 +151,16 @@ def to_excel(df_cheio, df_ativados, df_desativados, df_suspensos):
     return output.getvalue()
 
 def create_pdf_report(nome_cliente, periodo, totais, df_cheio, df_ativados, df_desativados):
-    pdf = FPDF(orientation='L')
+    # Utiliza a nova classe PDF com cabeçalho e rodapé automáticos
+    pdf = PDF(orientation='L')
+    pdf.set_auto_page_break(auto=True, margin=35) # Margem inferior para o rodapé
     pdf.add_page()
-    try:
-        pdf.image("imgs/logo.png", x=10, y=8, w=50)
-    except Exception:
-        pdf.set_font("Arial", "B", 20)
-        pdf.cell(0, 10, "Verdio", 0, 1, "L")
+    
+    # O cabeçalho é adicionado automaticamente pelo método header() da classe PDF
 
     pdf.set_font("Arial", "B", 16)
     pdf.cell(0, 10, "Resumo do Faturamento", 0, 1, "C")
-    pdf.ln(15)
+    pdf.ln(5)
 
     pdf.set_font("Arial", "", 12)
     pdf.cell(0, 8, f"Cliente: {nome_cliente}", 0, 1, "L")
@@ -202,6 +237,7 @@ def create_pdf_report(nome_cliente, periodo, totais, df_cheio, df_ativados, df_d
     }
     draw_table("Detalhamento Proporcional (Desativações no Mês)", df_desativados, widths_desativados, cols_desativados)
 
+    # O rodapé é adicionado automaticamente pelo método footer() da classe PDF
     return bytes(pdf.output(dest='S').encode('latin-1'))
 
 # --- 3. INTERFACE DA PÁGINA ---
