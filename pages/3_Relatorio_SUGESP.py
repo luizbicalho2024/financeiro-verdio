@@ -55,7 +55,7 @@ def buscar_transacoes_em_partes(token, data_inicio, data_fim, chunk_days=15):
     """
     todas_transacoes = []
     current_start = data_inicio
-    progress_bar = st.progress(0.0)
+    progress_bar = st.progress(0.0, "Iniciando coleta de transações...")
     status_text = st.empty()
     
     total_days = (data_fim - data_inicio).days + 1
@@ -66,9 +66,12 @@ def buscar_transacoes_em_partes(token, data_inicio, data_fim, chunk_days=15):
         if current_end > data_fim:
             current_end = data_fim
 
-        status_text.info(f"Buscando transações de {current_start.strftime('%d/%m/%Y')} a {current_end.strftime('%d/%m/%Y')}...")
+        progress_text = f"Buscando transações de {current_start.strftime('%d/%m/%Y')} a {current_end.strftime('%d/%m/%Y')}..."
+        status_text.info(progress_text)
         
         endpoint = f"transacoes?TransacaoSearch[data_cadastro]={current_start.strftime('%d/%m/%Y')} - {current_end.strftime('%d/%m/%Y')}"
+        # A função buscar_dados_api é "cacheada", precisamos invalidar o cache para cada endpoint diferente
+        # Para isso, simplesmente passamos o endpoint como um argumento que muda a cada chamada.
         dados, erro = buscar_dados_api(token, endpoint)
 
         if erro:
@@ -82,13 +85,14 @@ def buscar_transacoes_em_partes(token, data_inicio, data_fim, chunk_days=15):
         days_in_chunk = (current_end - current_start).days + 1
         days_processed += days_in_chunk
         progress = min(1.0, days_processed / total_days)
-        progress_bar.progress(progress)
+        progress_bar.progress(progress, text=progress_text)
         
         current_start = current_end + timedelta(days=1)
     
     status_text.success("Coleta de transações concluída!")
     progress_bar.empty()
     return todas_transacoes, None
+
 
 def processar_dados_completos(dados_faturas, dados_empenhos, dados_transacoes, dados_contratos):
     """
@@ -181,15 +185,12 @@ def gerar_texto_relatorio(dados_secretaria, inputs_manuais):
     ]
     
     partes_consumo = []
-    # Usando items() para pegar produto e valor_bruto
     for produto, valor_bruto in dados_secretaria['Consumo Bruto'].items():
         valor_ir = dados_secretaria['Consumo IR'].get(produto, 0)
-        # O exemplo usa '||' como separador em alguns casos, mas a maioria é '|'. Usarei '|' para consistência.
         partes_consumo.append(
             f"Combustível: {produto} | Valor Bruto: R$ {valor_bruto:,.2f} | Soma de VLR IRRF: R$ {valor_ir:,.2f}"
         )
 
-    # Junta tudo em uma única string, garantindo que a parte de consumo venha no final.
     relatorio_completo = " | ".join(partes_principais)
     if partes_consumo:
         relatorio_completo += " | " + " | ".join(partes_consumo)
@@ -226,54 +227,49 @@ with col_b:
     conta = st.text_input("C/C", "20-5")
 
 if st.button("🚀 Gerar Relatório", type="primary"):
-    # Cria um espaço reservado para o spinner e a barra de progresso
-    spinner_placeholder = st.empty()
-    with spinner_placeholder.spinner("Buscando e processando dados..."):
-        st.info("Buscando dados de faturas, empenhos e contratos...")
-        dados_faturas, erro_faturas = buscar_dados_api(token, "fatura-recebimentos?expand=cliente,configuracao.faturamentoTipo,grupo.grupo,status")
-        dados_empenhos, erro_empenhos = buscar_dados_api(token, "empenhos?expand=contrato.empresa,grupo")
-        dados_contratos, erro_contratos = buscar_dados_api(token, "contratos")
-        
-        # A busca de transações agora mostra o progresso dentro da função
-        dados_transacoes, erro_transacoes = buscar_transacoes_em_partes(token, data_inicio, data_fim)
-        
-        # Limpa o spinner após a conclusão das buscas
-        spinner_placeholder.empty()
+    
+    st.info("Buscando dados de faturas, empenhos e contratos...")
+    dados_faturas, erro_faturas = buscar_dados_api(token, "fatura-recebimentos?expand=cliente,configuracao.faturamentoTipo,grupo.grupo,status")
+    dados_empenhos, erro_empenhos = buscar_dados_api(token, "empenhos?expand=contrato.empresa,grupo")
+    dados_contratos, erro_contratos = buscar_dados_api(token, "contratos")
+    
+    # A busca de transações agora mostra o progresso dentro da sua própria função
+    dados_transacoes, erro_transacoes = buscar_transacoes_em_partes(token, data_inicio, data_fim)
 
-        erros = [e for e in [erro_faturas, erro_empenhos, erro_transacoes, erro_contratos] if e]
-        if erros:
-            for erro in erros:
-                st.error(erro)
-        else:
-            st.info("Processando e cruzando todos os dados...")
+    erros = [e for e in [erro_faturas, erro_empenhos, erro_transacoes, erro_contratos] if e]
+    if erros:
+        for erro in erros:
+            st.error(erro)
+    else:
+        with st.spinner("Processando e cruzando todos os dados..."):
             faturas_filtradas = [f for f in dados_faturas if cliente_principal.upper() in f.get('cliente',{}).get('nome','').upper()]
             
             dados_finais = processar_dados_completos(faturas_filtradas, dados_empenhos, dados_transacoes, dados_contratos)
-            
-            if not dados_finais:
-                st.warning(f"Nenhuma fatura encontrada para o cliente '{cliente_principal}'.")
-            else:
-                st.success(f"Dados processados! {len(dados_finais)} relatórios gerados.")
-                st.markdown("---")
-                st.subheader("3. Resultado Final")
+        
+        if not dados_finais:
+            st.warning(f"Nenhuma fatura encontrada para o cliente '{cliente_principal}'.")
+        else:
+            st.success(f"Dados processados! {len(dados_finais)} relatórios gerados.")
+            st.markdown("---")
+            st.subheader("3. Resultado Final")
 
-                texto_completo_para_download = ""
+            texto_completo_para_download = ""
 
-                for secretaria_original, dados in sorted(dados_finais.items()):
-                    inputs_manuais = {
-                        "banco": banco, "agencia": agencia, "conta": conta, 
-                        "cnpj": cnpj, "nome_empresa": nome_empresa, 
-                        "termo_contrato": termo_contrato,
-                    }
-                    texto_gerado = gerar_texto_relatorio(dados, inputs_manuais)
-                    texto_completo_para_download += texto_gerado + "\n\n"
-                    
-                    st.markdown(f"#### {secretaria_original}")
-                    st.code(texto_gerado, language=None)
+            for secretaria_original, dados in sorted(dados_finais.items()):
+                inputs_manuais = {
+                    "banco": banco, "agencia": agencia, "conta": conta, 
+                    "cnpj": cnpj, "nome_empresa": nome_empresa, 
+                    "termo_contrato": termo_contrato,
+                }
+                texto_gerado = gerar_texto_relatorio(dados, inputs_manuais)
+                texto_completo_para_download += texto_gerado + "\n\n"
                 
-                st.download_button(
-                    label="📥 Baixar Relatório Completo (.txt)",
-                    data=texto_completo_para_download.encode('utf-8'),
-                    file_name=f"Relatorio_{cliente_principal.replace(' ', '_')}_{hoje.strftime('%Y-%m-%d')}.txt",
-                    mime='text/plain'
-                )
+                st.markdown(f"#### {secretaria_original}")
+                st.code(texto_gerado, language=None)
+            
+            st.download_button(
+                label="📥 Baixar Relatório Completo (.txt)",
+                data=texto_completo_para_download.encode('utf-8'),
+                file_name=f"Relatorio_{cliente_principal.replace(' ', '_')}_{hoje.strftime('%Y-%m-%d')}.txt",
+                mime='text/plain'
+            )
