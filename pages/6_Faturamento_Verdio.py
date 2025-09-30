@@ -235,13 +235,12 @@ def create_pdf_report(nome_cliente, periodo, totais, df_cheio, df_ativados, df_d
                 pdf.ln()
             pdf.ln(5)
 
-    # Dicionário de cabeçalhos ajustado
     header_map = {
         'Nº Equipamento': 'Nº\nEquipamento',
         'Valor a Faturar': 'Valor a\nFaturar',
         'Data Ativação': 'Data\nAtivação',
         'Data Desativação': 'Data\nDesativação',
-        'Dias Ativos Mês': 'Dias\nAtivos', # <-- AJUSTE FINAL AQUI
+        'Dias Ativos Mês': 'Dias\nAtivos',
         'Suspenso Dias Mes': 'Dias\nSuspensos',
         'Dias a Faturar': 'Dias a\nFaturar',
         'Valor Unitario': 'Valor\nUnitário'
@@ -279,10 +278,20 @@ st.markdown("---")
 # --- 4. INPUTS DE CONFIGURAÇÃO ---
 st.sidebar.header("Valores de Faturamento")
 pricing_config = umdb.get_pricing_config()
-default_gprs = float(pricing_config.get("PRECOS_PF", {}).get("GPRS / Gsm", 0.0))
-default_satelital = float(pricing_config.get("PLANOS_PJ", {}).get("36 Meses", {}).get("Satélite", 0.0))
-valor_gprs = st.sidebar.number_input("Valor Unitário Mensal (GPRS)", min_value=0.0, value=default_gprs, step=1.0, format="%.2f")
-valor_satelital = st.sidebar.number_input("Valor Unitário Mensal (Satelital)", min_value=0.0, value=default_satelital, step=1.0, format="%.2f")
+
+# Define os valores padrão, usando o session_state se um botão foi clicado para aplicar valores anteriores
+default_gprs = st.session_state.get('gprs_value_to_apply', float(pricing_config.get("PRECOS_PF", {}).get("GPRS / Gsm", 0.0)))
+default_satelital = st.session_state.get('satelital_value_to_apply', float(pricing_config.get("PLANOS_PJ", {}).get("36 Meses", {}).get("Satélite", 0.0)))
+
+valor_gprs = st.sidebar.number_input("Valor Unitário Mensal (GPRS)", min_value=0.0, value=default_gprs, step=1.0, format="%.2f", key="gprs_input")
+valor_satelital = st.sidebar.number_input("Valor Unitário Mensal (Satelital)", min_value=0.0, value=default_satelital, step=1.0, format="%.2f", key="satelital_input")
+
+# Limpa o session_state para não aplicar os valores novamente em re-runs indesejados
+if 'gprs_value_to_apply' in st.session_state:
+    del st.session_state['gprs_value_to_apply']
+if 'satelital_value_to_apply' in st.session_state:
+    del st.session_state['satelital_value_to_apply']
+
 
 # --- 5. UPLOAD DO FICHEIRO ---
 st.subheader("Carregamento do Relatório de Terminais")
@@ -301,6 +310,25 @@ if uploaded_file:
         if error_message:
             st.error(error_message)
         elif df_cheio is not None:
+            # --- LÓGICA PARA PUXAR VALORES ANTERIORES ---
+            last_billing = umdb.get_last_billing_for_client(nome_cliente)
+            if last_billing:
+                last_gprs = last_billing.get("valor_unitario_gprs", valor_gprs)
+                last_satelital = last_billing.get("valor_unitario_satelital", valor_satelital)
+
+                if last_gprs != valor_gprs or last_satelital != valor_satelital:
+                    st.info(f"💡 Encontramos os valores utilizados no último faturamento para **{nome_cliente}**.")
+                    col1, col2, col3 = st.columns([2,2,3])
+                    col1.metric("Último Valor GPRS", f"R$ {last_gprs:.2f}")
+                    col2.metric("Último Valor Satelital", f"R$ {last_satelital:.2f}")
+                    with col3:
+                        st.write("") # Espaçador
+                        if st.button("Aplicar valores e recalcular"):
+                            st.session_state['gprs_value_to_apply'] = last_gprs
+                            st.session_state['satelital_value_to_apply'] = last_satelital
+                            st.rerun()
+            # --- FIM DA LÓGICA ---
+
             total_faturamento_cheio = df_cheio['Valor a Faturar'].sum() if not df_cheio.empty else 0
             total_faturamento_ativados = df_ativados['Valor a Faturar'].sum() if not df_ativados.empty else 0
             total_faturamento_desativados = df_desativados['Valor a Faturar'].sum() if not df_desativados.empty else 0
