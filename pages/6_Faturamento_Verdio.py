@@ -152,7 +152,7 @@ def to_excel(df_cheio, df_ativados, df_desativados, df_suspensos):
         df_suspensos.to_excel(writer, index=False, sheet_name='Terminais Suspensos')
     return output.getvalue()
 
-def create_pdf_report(nome_cliente, periodo, totais, df_cheio, df_ativados, df_desativados):
+def create_pdf_report(nome_cliente, periodo, totais, df_cheio, df_ativados, df_desativados, df_suspensos):
     # Utiliza a nova classe PDF com orientação VERTICAL ('P')
     pdf = PDF(orientation='P')
     pdf.set_auto_page_break(auto=True, margin=35) # Margem inferior para o rodapé
@@ -239,6 +239,11 @@ def create_pdf_report(nome_cliente, periodo, totais, df_cheio, df_ativados, df_d
     
     cols_desativados = ['Terminal', 'Nº Equipamento', 'Placa', 'Tipo', 'Data Desativação', 'Dias Ativos Mês', 'Suspenso Dias Mes', 'Dias a Faturar', 'Valor Unitario', 'Valor a Faturar']
     draw_table("Detalhamento Proporcional (Desativações no Mês)", df_desativados, widths_proporcional, cols_desativados)
+
+    # --- NOVO BLOCO PARA TERMINAIS SUSPENSOS ---
+    widths_suspensos = {'Terminal': 40, 'Nº Equipamento': 40, 'Placa': 40, 'Tipo': 25, 'Data Ativação': 25, 'Suspenso Dias Mes': 20}
+    cols_suspensos = list(widths_suspensos.keys())
+    draw_table("Detalhamento dos Terminais Suspensos", df_suspensos, widths_suspensos, cols_suspensos)
     
     return bytes(pdf.output(dest='S').encode('latin-1'))
 
@@ -310,7 +315,8 @@ if uploaded_file:
                 "terminais_cheio": len(df_cheio), "terminais_proporcional": len(df_ativados) + len(df_desativados),
                 "terminais_suspensos": len(df_suspensos), "terminais_gprs": total_gprs, "terminais_satelitais": total_satelital
             }
-            pdf_data = create_pdf_report(nome_cliente, periodo_relatorio, totais_pdf, df_cheio, df_ativados, df_desativados)
+            # Atualiza a chamada da função para incluir o dataframe de suspensos
+            pdf_data = create_pdf_report(nome_cliente, periodo_relatorio, totais_pdf, df_cheio, df_ativados, df_desativados, df_suspensos)
             faturamento_data_log = {
                 "cliente": nome_cliente, "periodo_relatorio": periodo_relatorio,
                 "valor_total": faturamento_total_geral, "terminais_cheio": len(df_cheio),
