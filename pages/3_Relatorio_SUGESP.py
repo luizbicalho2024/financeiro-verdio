@@ -23,7 +23,7 @@ if "user_info" not in st.session_state:
     st.error("🔒 Acesso Negado! Por favor, faça login para visualizar esta página.")
     st.stop()
 
-# --- BARRA LATERAL PADRONIZADA ---
+# --- BARRA LATERAL PADRONIZA ---
 st.sidebar.image("imgs/v-c.png", width=120)
 st.sidebar.title(f"Olá, {st.session_state.get('name', 'N/A')}! 👋")
 st.sidebar.markdown("---")
@@ -104,11 +104,17 @@ def processar_dados_completos(dados_faturas, dados_empenhos, dados_transacoes, d
     
     mapa_empenhos = defaultdict(list)
     for e in dados_empenhos:
-        if 'grupo_id' in e and e.get('numero_empenho'):
+        if e and isinstance(e, dict) and 'grupo_id' in e and e.get('numero_empenho'):
             mapa_empenhos[e['grupo_id']].append(e['numero_empenho'])
 
     df_transacoes = pd.json_normalize(dados_transacoes)
-    df_transacoes['grupo_id'] = df_transacoes['informacao.search.subgrupo.id'].fillna(df_transacoes['informacao.search.grupo.id'])
+    if 'informacao.search.subgrupo.id' in df_transacoes.columns:
+        df_transacoes['grupo_id'] = df_transacoes['informacao.search.subgrupo.id'].fillna(df_transacoes.get('informacao.search.grupo.id'))
+    elif 'informacao.search.grupo.id' in df_transacoes.columns:
+        df_transacoes['grupo_id'] = df_transacoes['informacao.search.grupo.id']
+    else:
+        df_transacoes['grupo_id'] = None
+        
     df_transacoes.rename(columns={
         'informacao.produto.nome': 'Produto',
         'valor_total': 'Valor Bruto',
@@ -116,12 +122,12 @@ def processar_dados_completos(dados_faturas, dados_empenhos, dados_transacoes, d
     }, inplace=True)
     
     for col in ['Valor Bruto', 'IR Retido', 'grupo_id']:
-        df_transacoes[col] = pd.to_numeric(df_transacoes[col], errors='coerce').fillna(0)
+        if col in df_transacoes.columns:
+            df_transacoes[col] = pd.to_numeric(df_transacoes[col], errors='coerce').fillna(0)
 
     relatorios_finais = {}
     
     for fatura in dados_faturas:
-        # CORREÇÃO: Verifica se o objeto 'grupo' existe e é um dicionário antes de acessá-lo
         grupo_obj = fatura.get('grupo')
         if not grupo_obj or not isinstance(grupo_obj, dict):
             continue
@@ -135,7 +141,7 @@ def processar_dados_completos(dados_faturas, dados_empenhos, dados_transacoes, d
         data_inicio_apuracao = pd.to_datetime(fatura['inicio_apuracao']).date()
         data_fim_apuracao = pd.to_datetime(fatura['fim_apuracao']).date()
         
-        df_transacoes['data_cadastro_dt'] = pd.to_datetime(df_transacoes['data_cadastro']).dt.date
+        df_transacoes['data_cadastro_dt'] = pd.to_datetime(df_transacoes['data_cadastro'], errors='coerce').dt.date
         
         transacoes_secretaria = df_transacoes[
             (df_transacoes['grupo_id'] == grupo_id) &
@@ -248,7 +254,7 @@ if st.button("🚀 Gerar Relatório", type="primary"):
             clean_cnpj_input = re.sub(r'[^\d]', '', cliente_cnpj)
             faturas_filtradas = [
                 f for f in dados_faturas 
-                if re.sub(r'[^\d]', '', f.get('cliente', {}).get('cnpj', '')) == clean_cnpj_input
+                if f and isinstance(f, dict) and re.sub(r'[^\d]', '', f.get('cliente', {}).get('cnpj', '')) == clean_cnpj_input
             ]
             
             dados_finais = processar_dados_completos(faturas_filtradas, dados_empenhos, dados_transacoes, dados_contratos)
