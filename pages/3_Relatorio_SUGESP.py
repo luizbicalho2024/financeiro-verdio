@@ -41,7 +41,6 @@ def buscar_dados_api(token, endpoint):
     headers = {"Authorization": f"Bearer {token}"}
     url = f"https://sigyo.uzzipay.com/api/{endpoint}"
     try:
-        # Aumentado o tempo de espera para 120 segundos (2 minutos)
         response = requests.get(url, headers=headers, timeout=120)
         response.raise_for_status()
         return response.json(), None
@@ -49,6 +48,48 @@ def buscar_dados_api(token, endpoint):
         return None, f"Erro HTTP {response.status_code}: Token inválido ou API indisponível no endpoint '{endpoint}'."
     except requests.exceptions.RequestException as e:
         return None, f"Erro de conexão com o endpoint '{endpoint}': {e}"
+
+def buscar_transacoes_em_partes(token, data_inicio, data_fim, chunk_days=15):
+    """
+    Busca transações em pedaços menores para evitar erro 500 em grandes volumes de dados.
+    """
+    todas_transacoes = []
+    current_start = data_inicio
+    progress_bar = st.progress(0.0)
+    status_text = st.empty()
+    
+    total_days = (data_fim - data_inicio).days + 1
+    days_processed = 0
+
+    while current_start <= data_fim:
+        current_end = current_start + timedelta(days=chunk_days - 1)
+        if current_end > data_fim:
+            current_end = data_fim
+
+        status_text.info(f"Buscando transações de {current_start.strftime('%d/%m/%Y')} a {current_end.strftime('%d/%m/%Y')}...")
+        
+        endpoint = f"transacoes?TransacaoSearch[data_cadastro]={current_start.strftime('%d/%m/%Y')} - {current_end.strftime('%d/%m/%Y')}"
+        dados, erro = buscar_dados_api(token, endpoint)
+
+        if erro:
+            status_text.empty()
+            progress_bar.empty()
+            return None, f"Erro ao buscar o lote de {current_start.strftime('%d/%m/%Y')} a {current_end.strftime('%d/%m/%Y')}: {erro}"
+        
+        if dados:
+            todas_transacoes.extend(dados)
+
+        days_in_chunk = (current_end - current_start).days + 1
+        days_processed += days_in_chunk
+        progress = min(1.0, days_processed / total_days)
+        progress_bar.progress(progress)
+        
+        current_start = current_end + timedelta(days=1)
+    
+    status_text.success("Coleta de transações concluída!")
+    progress_bar.empty()
+    return todas_transacoes, None
+
 
 def processar_dados_completos(dados_faturas, dados_empenhos, dados_transacoes, dados_contratos):
     """
@@ -181,18 +222,22 @@ with col_b:
     conta = st.text_input("C/C", "20-5")
 
 if st.button("🚀 Gerar Relatório", type="primary"):
-    with st.spinner("Buscando e processando dados de todas as APIs... (Isso pode levar até 2 minutos)"):
-        endpoint_transacoes = f"transacoes?TransacaoSearch[data_cadastro]={data_inicio.strftime('%d/%m/%Y')} - {data_fim.strftime('%d/%m/%Y')}"
+    with st.spinner("Buscando e processando dados..."):
+        # Busca faturas, empenhos e contratos
+        st.info("Buscando dados de faturas, empenhos e contratos...")
         dados_faturas, erro_faturas = buscar_dados_api(token, "fatura-recebimentos?expand=cliente,configuracao.faturamentoTipo,grupo.grupo,status")
         dados_empenhos, erro_empenhos = buscar_dados_api(token, "empenhos?expand=contrato.empresa,grupo")
-        dados_transacoes, erro_transacoes = buscar_dados_api(token, endpoint_transacoes)
         dados_contratos, erro_contratos = buscar_dados_api(token, "contratos")
+        
+        # Busca transações em partes
+        dados_transacoes, erro_transacoes = buscar_transacoes_em_partes(token, data_inicio, data_fim)
 
         erros = [e for e in [erro_faturas, erro_empenhos, erro_transacoes, erro_contratos] if e]
         if erros:
             for erro in erros:
                 st.error(erro)
         else:
+            st.info("Processando e cruzando todos os dados...")
             faturas_filtradas = [f for f in dados_faturas if cliente_principal.upper() in f.get('cliente',{}).get('nome','').upper()]
             
             dados_finais = processar_dados_completos(faturas_filtradas, dados_empenhos, dados_transacoes, dados_contratos)
