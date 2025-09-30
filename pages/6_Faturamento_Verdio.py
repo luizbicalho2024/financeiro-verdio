@@ -205,21 +205,19 @@ def create_pdf_report(nome_cliente, periodo, totais, df_cheio, df_ativados, df_d
             y_start = pdf.get_y()
             x_start = pdf.get_x()
 
-            # 1. Desenha as células de borda
             for h in header:
                 width = col_widths.get(h, 20)
                 pdf.cell(width, header_row_height, '', border=1, ln=0, align='C')
             
-            # 2. Insere o texto, gerenciando a posição manualmente
             pdf.set_xy(x_start, y_start) 
             current_x = x_start
             for h in header:
                 width = col_widths.get(h, 20)
                 header_text = header_map.get(h, h)
-                pdf.set_x(current_x) # Define a posição X exata
+                pdf.set_x(current_x)
                 pdf.multi_cell(width, 4, header_text, border=0, align='C')
-                current_x += width # Atualiza a posição para a próxima célula
-                pdf.set_y(y_start) # Reseta a posição Y para a mesma linha
+                current_x += width
+                pdf.set_y(y_start)
 
             pdf.set_y(y_start + header_row_height)
             
@@ -237,12 +235,13 @@ def create_pdf_report(nome_cliente, periodo, totais, df_cheio, df_ativados, df_d
                 pdf.ln()
             pdf.ln(5)
 
+    # Dicionário de cabeçalhos ajustado
     header_map = {
         'Nº Equipamento': 'Nº\nEquipamento',
         'Valor a Faturar': 'Valor a\nFaturar',
         'Data Ativação': 'Data\nAtivação',
         'Data Desativação': 'Data\nDesativação',
-        'Dias Ativos Mês': 'Dias Ativos\nMês',
+        'Dias Ativos Mês': 'Dias\nAtivos', # <-- AJUSTE FINAL AQUI
         'Suspenso Dias Mes': 'Dias\nSuspensos',
         'Dias a Faturar': 'Dias a\nFaturar',
         'Valor Unitario': 'Valor\nUnitário'
