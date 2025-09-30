@@ -201,19 +201,18 @@ def create_pdf_report(nome_cliente, periodo, totais, df_cheio, df_ativados, df_d
             pdf.set_font("Arial", "B", 7)
             header = [h for h in available_cols if h in df.columns]
             
-            # Desenha cabeçalho com multi_cell para quebra de linha
             line_height = 4 
             y_start = pdf.get_y()
             for h in header:
                 width = col_widths.get(h, 20)
                 header_text = header_map.get(h, h)
                 x = pdf.get_x()
-                pdf.multi_cell(width, line_height, header_text, border=1, align='C', ln=3)
+                # CORREÇÃO: Removido o parâmetro 'ln' incorreto.
+                pdf.multi_cell(width, line_height, header_text, border=1, align='C')
                 pdf.set_y(y_start)
                 pdf.set_x(x + width)
             pdf.ln(line_height * 2)
 
-            # Desenha linhas de dados
             pdf.set_font("Arial", "", 6)
             for _, row in df.iterrows():
                 for h in header:
