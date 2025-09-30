@@ -90,7 +90,6 @@ def buscar_transacoes_em_partes(token, data_inicio, data_fim, chunk_days=15):
     progress_bar.empty()
     return todas_transacoes, None
 
-
 def processar_dados_completos(dados_faturas, dados_empenhos, dados_transacoes, dados_contratos):
     """
     Orquestra o processamento e cruzamento de todas as fontes de dados.
@@ -146,7 +145,7 @@ def processar_dados_completos(dados_faturas, dados_empenhos, dados_transacoes, d
         valor_liquido = float(fatura.get('valor_liquido', 0))
         ir_retido = float(fatura.get('imposto_renda', 0))
 
-        empenhos_str = ", ".join(mapa_empenhos.get(grupo_id, ["NÃO ENCONTRADO"]))
+        empenhos_str = ", ".join(sorted(list(set(mapa_empenhos.get(grupo_id, ["NÃO ENCONTRADO"])))))
 
         relatorios_finais[secretaria_nome] = {
             "Secretaria": secretaria_nome,
@@ -182,13 +181,18 @@ def gerar_texto_relatorio(dados_secretaria, inputs_manuais):
     ]
     
     partes_consumo = []
+    # Usando items() para pegar produto e valor_bruto
     for produto, valor_bruto in dados_secretaria['Consumo Bruto'].items():
         valor_ir = dados_secretaria['Consumo IR'].get(produto, 0)
+        # O exemplo usa '||' como separador em alguns casos, mas a maioria é '|'. Usarei '|' para consistência.
         partes_consumo.append(
             f"Combustível: {produto} | Valor Bruto: R$ {valor_bruto:,.2f} | Soma de VLR IRRF: R$ {valor_ir:,.2f}"
         )
 
-    relatorio_completo = " | ".join(partes_principais) + " | " + " | ".join(partes_consumo)
+    # Junta tudo em uma única string, garantindo que a parte de consumo venha no final.
+    relatorio_completo = " | ".join(partes_principais)
+    if partes_consumo:
+        relatorio_completo += " | " + " | ".join(partes_consumo)
     
     return relatorio_completo
 
@@ -222,15 +226,19 @@ with col_b:
     conta = st.text_input("C/C", "20-5")
 
 if st.button("🚀 Gerar Relatório", type="primary"):
-    with st.spinner("Buscando e processando dados..."):
-        # Busca faturas, empenhos e contratos
+    # Cria um espaço reservado para o spinner e a barra de progresso
+    spinner_placeholder = st.empty()
+    with spinner_placeholder.spinner("Buscando e processando dados..."):
         st.info("Buscando dados de faturas, empenhos e contratos...")
         dados_faturas, erro_faturas = buscar_dados_api(token, "fatura-recebimentos?expand=cliente,configuracao.faturamentoTipo,grupo.grupo,status")
         dados_empenhos, erro_empenhos = buscar_dados_api(token, "empenhos?expand=contrato.empresa,grupo")
         dados_contratos, erro_contratos = buscar_dados_api(token, "contratos")
         
-        # Busca transações em partes
+        # A busca de transações agora mostra o progresso dentro da função
         dados_transacoes, erro_transacoes = buscar_transacoes_em_partes(token, data_inicio, data_fim)
+        
+        # Limpa o spinner após a conclusão das buscas
+        spinner_placeholder.empty()
 
         erros = [e for e in [erro_faturas, erro_empenhos, erro_transacoes, erro_contratos] if e]
         if erros:
