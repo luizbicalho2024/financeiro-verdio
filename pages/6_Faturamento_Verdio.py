@@ -9,7 +9,7 @@ from datetime import datetime
 import io
 import user_management_db as umdb
 from fpdf import FPDF
-import locale # <-- 1. IMPORTA A BIBLIOTECA LOCALE
+import locale # <-- IMPORTA A BIBLIOTECA LOCALE
 
 # --- CLASSE PARA GERAR PDF COM IDENTIDADE VISUAL (VERSÃO FINAL) ---
 class PDF(FPDF):
@@ -80,7 +80,7 @@ def processar_planilha_faturamento(file_bytes, valor_gprs, valor_satelital):
     Lê a planilha, extrai informações, classifica, calcula e retorna os dataframes de faturamento.
     """
     try:
-        # --- 2. CONFIGURA O LOCALE PARA PORTUGUÊS DO BRASIL ---
+        # --- CONFIGURA O LOCALE PARA PORTUGUÊS DO BRASIL ---
         try:
             locale.setlocale(locale.LC_TIME, 'pt_BR.UTF-8')
         except locale.Error:
