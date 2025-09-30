@@ -21,8 +21,9 @@ class PDF(FPDF):
         """
         try:
             page_width = self.w - self.l_margin - self.r_margin
+            # Desenha a imagem do cabeçalho
             self.image("imgs/header1.png", x=self.l_margin, y=8, w=page_width)
-            self.ln(30)
+            # A posição do conteúdo abaixo é gerenciada pela margem superior do documento
         except Exception:
             self.set_font("Arial", "B", 20)
             self.cell(0, 10, "Uzzipay Soluções", 0, 1, "L")
@@ -33,7 +34,8 @@ class PDF(FPDF):
         Adiciona o rodapé com as informações da empresa em todas as páginas.
         """
         try:
-            self.set_y(-30)
+            # Posiciona o rodapé um pouco mais para cima para evitar cortes
+            self.set_y(-35)
             page_width = self.w - self.l_margin - self.r_margin
             self.image("imgs/footer1.png", x=self.l_margin, y=self.get_y(), w=page_width)
         except Exception:
@@ -156,7 +158,9 @@ def to_excel(df_cheio, df_ativados, df_desativados, df_suspensos):
 
 def create_pdf_report(nome_cliente, periodo, totais, df_cheio, df_ativados, df_desativados, df_suspensos):
     pdf = PDF(orientation='P')
-    pdf.set_auto_page_break(auto=True, margin=35)
+    # Define as margens superior e inferior para evitar sobreposição
+    pdf.set_top_margin(40)
+    pdf.set_auto_page_break(auto=True, margin=40)
     pdf.add_page()
     
     pdf.set_font("Arial", "B", 16)
@@ -279,18 +283,13 @@ st.markdown("---")
 st.sidebar.header("Valores de Faturamento")
 pricing_config = umdb.get_pricing_config()
 
-# --- LÓGICA CORRIGIDA PARA ATUALIZAÇÃO DOS VALORES ---
-# 1. Verifica se há valores temporários para aplicar (do clique no botão)
 if 'gprs_to_apply' in st.session_state:
-    # 2. Se houver, define esses valores como os padrões para esta execução
     default_gprs = st.session_state.pop('gprs_to_apply')
     default_satelital = st.session_state.pop('satelital_to_apply')
 else:
-    # 3. Se não, usa os valores padrão do config
     default_gprs = float(pricing_config.get("PRECOS_PF", {}).get("GPRS / Gsm", 0.0))
     default_satelital = float(pricing_config.get("PLANOS_PJ", {}).get("36 Meses", {}).get("Satélite", 0.0))
 
-# 4. Renderiza os widgets. Eles usarão os 'defaults' definidos acima.
 valor_gprs = st.sidebar.number_input("Valor Unitário Mensal (GPRS)", min_value=0.0, value=default_gprs, step=1.0, format="%.2f")
 valor_satelital = st.sidebar.number_input("Valor Unitário Mensal (Satelital)", min_value=0.0, value=default_satelital, step=1.0, format="%.2f")
 
@@ -311,7 +310,6 @@ if uploaded_file:
         if error_message:
             st.error(error_message)
         elif df_cheio is not None:
-            # --- LÓGICA PARA PUXAR VALORES ANTERIORES ---
             last_billing = umdb.get_last_billing_for_client(nome_cliente)
             if last_billing:
                 last_gprs = last_billing.get("valor_unitario_gprs", valor_gprs)
@@ -325,11 +323,9 @@ if uploaded_file:
                     with col3:
                         st.write("") 
                         if st.button("Aplicar valores e recalcular"):
-                            # 5. Ao clicar, armazena os valores em chaves temporárias e reinicia a página
                             st.session_state['gprs_to_apply'] = last_gprs
                             st.session_state['satelital_to_apply'] = last_satelital
                             st.rerun()
-            # --- FIM DA LÓGICA ---
 
             total_faturamento_cheio = df_cheio['Valor a Faturar'].sum() if not df_cheio.empty else 0
             total_faturamento_ativados = df_ativados['Valor a Faturar'].sum() if not df_ativados.empty else 0
