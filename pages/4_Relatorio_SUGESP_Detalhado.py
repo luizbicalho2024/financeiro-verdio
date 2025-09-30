@@ -87,7 +87,7 @@ def buscar_transacoes_em_partes(token, data_inicio, data_fim, chunk_days=7):
 
 def processar_relatorio_com_base_nas_transacoes(faturas, transacoes, empenhos, contratos, produtos, dados_bancarios, info_empresa, data_inicio):
     """
-    LÓGICA CORRIGIDA: Gera relatórios agregando dados a partir das transações e tratando casos onde a fatura não é encontrada.
+    LÓGICA FINAL: Gera relatórios agregando dados a partir das transações e tratando casos onde a fatura ou a configuração são nulas.
     """
     mapa_produtos = {p['id']: p['nome'] for p in produtos}
     mapa_contratos = {c['id']: c for c in contratos}
@@ -152,12 +152,13 @@ def processar_relatorio_com_base_nas_transacoes(faturas, transacoes, empenhos, c
         primeira_transacao = transacoes_da_secretaria[0]
         contrato_id_transacao = primeira_transacao.get('contrato_id')
         
-        # LÓGICA DE CORREÇÃO DO ERRO
+        # LÓGICA DE CORREÇÃO FINAL
         if not contrato_id_transacao and primeira_transacao.get('faturamento_id_cliente'):
             fatura_da_transacao = next((f for f in faturas if f.get('id') == primeira_transacao['faturamento_id_cliente']), None)
-            # Adiciona uma verificação para garantir que a fatura foi encontrada antes de acessá-la
             if fatura_da_transacao:
-                contrato_id_transacao = fatura_da_transacao.get('configuracao', {}).get('contrato_id')
+                configuracao = fatura_da_transacao.get('configuracao')
+                if configuracao: # Verifica se a configuração não é nula
+                    contrato_id_transacao = configuracao.get('contrato_id')
 
         numero_contrato = "N/A"
         if contrato_id_transacao and contrato_id_transacao in mapa_contratos:
