@@ -10,7 +10,7 @@ import io
 import user_management_db as umdb
 from fpdf import FPDF
 
-# --- CLASSE PARA GERAR PDF COM IDENTIDADE VISUAL (AJUSTADA NOVAMENTE) ---
+# --- CLASSE PARA GERAR PDF COM IDENTIDADE VISUAL (VERSÃO FINAL) ---
 class PDF(FPDF):
     """
     Classe customizada para gerar PDFs com cabeçalho e rodapé padrão da Uzzipay.
@@ -20,11 +20,13 @@ class PDF(FPDF):
         Adiciona o cabeçalho com o logo da Uzzipay Soluções em todas as páginas.
         """
         try:
-            # Define uma ALTURA fixa para a imagem do cabeçalho (ex: 20mm).
-            # A largura será calculada automaticamente para manter a proporção.
-            self.image("imgs/header1.png", x=self.l_margin, y=10, h=20)
-            # Ajusta o espaço vertical para o conteúdo começar logo abaixo do cabeçalho.
-            self.ln(25)
+            # Largura da página menos as margens
+            page_width = self.w - self.l_margin - self.r_margin
+            # Adiciona a imagem do cabeçalho preenchendo a largura da página vertical
+            # A altura é calculada automaticamente para manter a proporção.
+            self.image("imgs/header1.png", x=self.l_margin, y=8, w=page_width)
+            # Adiciona um espaço vertical após o cabeçalho
+            self.ln(30)
         except Exception:
             # Fallback caso a imagem não seja encontrada
             self.set_font("Arial", "B", 20)
@@ -36,11 +38,12 @@ class PDF(FPDF):
         Adiciona o rodapé com as informações da empresa em todas as páginas.
         """
         try:
-            # Posiciona o cursor para o rodapé
-            self.set_y(-25)
-            # Define uma ALTURA fixa para a imagem do rodapé (ex: 15mm).
-            # A largura será calculada automaticamente para manter a proporção.
-            self.image("imgs/footer1.png", x=self.l_margin, y=self.get_y(), h=15)
+            # Posiciona o cursor a 3 cm da parte inferior da página
+            self.set_y(-30)
+            page_width = self.w - self.l_margin - self.r_margin
+            # Adiciona a imagem do rodapé preenchendo a largura da página
+            # A altura é calculada automaticamente para manter a proporção.
+            self.image("imgs/footer1.png", x=self.l_margin, y=self.get_y(), w=page_width)
         except Exception:
             # Fallback caso a imagem não seja encontrada
             self.set_y(-15)
@@ -150,13 +153,11 @@ def to_excel(df_cheio, df_ativados, df_desativados, df_suspensos):
     return output.getvalue()
 
 def create_pdf_report(nome_cliente, periodo, totais, df_cheio, df_ativados, df_desativados):
-    # Utiliza a nova classe PDF com cabeçalho e rodapé automáticos
-    pdf = PDF(orientation='L')
-    pdf.set_auto_page_break(auto=True, margin=30) # Margem inferior para o rodapé
+    # Utiliza a nova classe PDF com orientação VERTICAL ('P')
+    pdf = PDF(orientation='P')
+    pdf.set_auto_page_break(auto=True, margin=35) # Margem inferior para o rodapé
     pdf.add_page()
     
-    # O cabeçalho é adicionado automaticamente pelo método header() da classe PDF
-
     pdf.set_font("Arial", "B", 16)
     pdf.cell(0, 10, "Resumo do Faturamento", 0, 1, "C")
     pdf.ln(5)
@@ -166,26 +167,31 @@ def create_pdf_report(nome_cliente, periodo, totais, df_cheio, df_ativados, df_d
     pdf.cell(0, 8, f"Período: {periodo}", 0, 1, "L")
     pdf.ln(5)
 
-    pdf.set_font("Arial", "B", 10)
-    pdf.cell(55, 8, "Nº Fat. Cheio", 1, 0, "C")
-    pdf.cell(55, 8, "Nº Fat. Proporcional", 1, 0, "C")
-    pdf.cell(55, 8, "Nº Suspensos", 1, 0, "C")
-    pdf.cell(55, 8, "Total Terminais GPRS", 1, 0, "C")
-    pdf.cell(55, 8, "Total Terminais Satelitais", 1, 1, "C")
-    pdf.set_font("Arial", "", 10)
-    pdf.cell(55, 8, str(totais['terminais_cheio']), 1, 0, "C")
-    pdf.cell(55, 8, str(totais['terminais_proporcional']), 1, 0, "C")
-    pdf.cell(55, 8, str(totais['terminais_suspensos']), 1, 0, "C")
-    pdf.cell(55, 8, str(totais['terminais_gprs']), 1, 0, "C")
-    pdf.cell(55, 8, str(totais['terminais_satelitais']), 1, 1, "C")
+    # Tabela de Resumo Superior
+    pdf.set_font("Arial", "B", 9)
+    # Largura total da página - margens
+    table_width = pdf.w - pdf.l_margin - pdf.r_margin
+    col_width = table_width / 5
+    pdf.cell(col_width, 8, "Nº Fat. Cheio", 1, 0, "C")
+    pdf.cell(col_width, 8, "Nº Fat. Proporcional", 1, 0, "C")
+    pdf.cell(col_width, 8, "Nº Suspensos", 1, 0, "C")
+    pdf.cell(col_width, 8, "Total GPRS", 1, 0, "C")
+    pdf.cell(col_width, 8, "Total Satelitais", 1, 1, "C")
+    pdf.set_font("Arial", "", 9)
+    pdf.cell(col_width, 8, str(totais['terminais_cheio']), 1, 0, "C")
+    pdf.cell(col_width, 8, str(totais['terminais_proporcional']), 1, 0, "C")
+    pdf.cell(col_width, 8, str(totais['terminais_suspensos']), 1, 0, "C")
+    pdf.cell(col_width, 8, str(totais['terminais_gprs']), 1, 0, "C")
+    pdf.cell(col_width, 8, str(totais['terminais_satelitais']), 1, 1, "C")
     pdf.ln(5)
 
+    # Tabela de Faturamento
     pdf.set_font("Arial", "B", 11)
-    pdf.cell(138, 8, "Faturamento (Cheio)", 1, 0, "C")
-    pdf.cell(138, 8, "Faturamento (Proporcional)", 1, 1, "C")
+    pdf.cell(table_width / 2, 8, "Faturamento (Cheio)", 1, 0, "C")
+    pdf.cell(table_width / 2, 8, "Faturamento (Proporcional)", 1, 1, "C")
     pdf.set_font("Arial", "", 11)
-    pdf.cell(138, 8, f"R$ {totais['cheio']:,.2f}", 1, 0, "C")
-    pdf.cell(138, 8, f"R$ {totais['proporcional']:,.2f}", 1, 1, "C")
+    pdf.cell(table_width / 2, 8, f"R$ {totais['cheio']:,.2f}", 1, 0, "C")
+    pdf.cell(table_width / 2, 8, f"R$ {totais['proporcional']:,.2f}", 1, 1, "C")
     pdf.set_font("Arial", "B", 11)
     pdf.cell(0, 10, f"FATURAMENTO TOTAL: R$ {totais['geral']:,.2f}", 1, 1, "C")
     pdf.ln(10)
@@ -194,7 +200,8 @@ def create_pdf_report(nome_cliente, periodo, totais, df_cheio, df_ativados, df_d
         if not df.empty:
             pdf.set_font("Arial", "B", 12)
             pdf.cell(0, 10, title, 0, 1, "L")
-            pdf.set_font("Arial", "B", 8)
+            # Reduz o tamanho da fonte para as tabelas detalhadas
+            pdf.set_font("Arial", "B", 7)
 
             header = [h for h in available_cols if h in df.columns]
 
@@ -202,7 +209,8 @@ def create_pdf_report(nome_cliente, periodo, totais, df_cheio, df_ativados, df_d
                 pdf.cell(col_widths.get(h, 20), 7, h, 1, 0, 'C')
             pdf.ln()
 
-            pdf.set_font("Arial", "", 7)
+            # Reduz o tamanho da fonte para o conteúdo da tabela
+            pdf.set_font("Arial", "", 6)
             for _, row in df.iterrows():
                 for h in header:
                     cell_text = str(row[h])
@@ -216,27 +224,22 @@ def create_pdf_report(nome_cliente, periodo, totais, df_cheio, df_ativados, df_d
                 pdf.ln()
             pdf.ln(5)
 
-    cols_cheio = ['Terminal', 'Nº Equipamento', 'Placa', 'Tipo', 'Valor a Faturar']
-    widths_cheio = {'Terminal': 60, 'Nº Equipamento': 60, 'Placa': 60, 'Tipo': 47, 'Valor a Faturar': 50}
+    # Larguras das colunas ajustadas para a página vertical (~190mm de largura útil)
+    widths_cheio = {'Terminal': 45, 'Nº Equipamento': 45, 'Placa': 40, 'Tipo': 25, 'Valor a Faturar': 35}
+    cols_cheio = list(widths_cheio.keys())
     draw_table("Detalhamento do Faturamento Cheio", df_cheio, widths_cheio, cols_cheio)
-
+    
+    widths_proporcional = {
+        'Terminal': 22, 'Nº Equipamento': 22, 'Placa': 22, 'Tipo': 15, 'Data Ativação': 18, 
+        'Data Desativação': 18, 'Dias Ativos Mês': 15, 'Suspenso Dias Mes': 18, 
+        'Dias a Faturar': 15, 'Valor Unitario': 20, 'Valor a Faturar': 20
+    }
     cols_ativados = ['Terminal', 'Nº Equipamento', 'Placa', 'Tipo', 'Data Ativação', 'Dias Ativos Mês', 'Suspenso Dias Mes', 'Dias a Faturar', 'Valor Unitario', 'Valor a Faturar']
-    widths_ativados = {
-        'Terminal': 25, 'Nº Equipamento': 30, 'Placa': 25, 'Tipo': 20, 'Data Ativação': 25,
-        'Dias Ativos Mês': 20, 'Suspenso Dias Mes': 25, 'Dias a Faturar': 20,
-        'Valor Unitario': 30, 'Valor a Faturar': 30
-    }
-    draw_table("Detalhamento Proporcional (Ativações no Mês)", df_ativados, widths_ativados, cols_ativados)
-
+    draw_table("Detalhamento Proporcional (Ativações no Mês)", df_ativados, widths_proporcional, cols_ativados)
+    
     cols_desativados = ['Terminal', 'Nº Equipamento', 'Placa', 'Tipo', 'Data Desativação', 'Dias Ativos Mês', 'Suspenso Dias Mes', 'Dias a Faturar', 'Valor Unitario', 'Valor a Faturar']
-    widths_desativados = {
-        'Terminal': 25, 'Nº Equipamento': 30, 'Placa': 25, 'Tipo': 20,
-        'Data Desativação': 25, 'Dias Ativos Mês': 20, 'Suspenso Dias Mes': 25,
-        'Dias a Faturar': 20, 'Valor Unitario': 30, 'Valor a Faturar': 30
-    }
-    draw_table("Detalhamento Proporcional (Desativações no Mês)", df_desativados, widths_desativados, cols_desativados)
-
-    # O rodapé é adicionado automaticamente pelo método footer() da classe PDF
+    draw_table("Detalhamento Proporcional (Desativações no Mês)", df_desativados, widths_proporcional, cols_desativados)
+    
     return bytes(pdf.output(dest='S').encode('latin-1'))
 
 # --- 3. INTERFACE DA PÁGINA ---
