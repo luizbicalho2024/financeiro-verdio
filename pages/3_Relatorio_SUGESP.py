@@ -1,6 +1,7 @@
 # pages/3_Relatorio_SUGESP.py
 import sys
 import os
+import re
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 import streamlit as st
@@ -49,7 +50,7 @@ def buscar_dados_api(token, endpoint):
     except requests.exceptions.RequestException as e:
         return None, f"Erro de conexão com o endpoint '{endpoint}': {e}"
 
-def buscar_transacoes_em_partes(token, data_inicio, data_fim, chunk_days=15):
+def buscar_transacoes_em_partes(token, data_inicio, data_fim, chunk_days=8): # Dividido em ~4 partes
     """
     Busca transações em pedaços menores para evitar erro 500 em grandes volumes de dados.
     """
@@ -70,8 +71,6 @@ def buscar_transacoes_em_partes(token, data_inicio, data_fim, chunk_days=15):
         status_text.info(progress_text)
         
         endpoint = f"transacoes?TransacaoSearch[data_cadastro]={current_start.strftime('%d/%m/%Y')} - {current_end.strftime('%d/%m/%Y')}"
-        # A função buscar_dados_api é "cacheada", precisamos invalidar o cache para cada endpoint diferente
-        # Para isso, simplesmente passamos o endpoint como um argumento que muda a cada chamada.
         dados, erro = buscar_dados_api(token, endpoint)
 
         if erro:
@@ -207,7 +206,8 @@ st.subheader("1. Parâmetros da Consulta")
 col1, col2 = st.columns(2)
 with col1:
     token = st.text_input("🔑 Token de Autenticação", type="password")
-    cliente_principal = st.text_input("👤 Cliente Principal (filtro inicial)", value="SUPERINTENDENCIA DE GESTAO DOS GASTOS PUBLICOS ADMINISTRATIVOS")
+    # Alterado para buscar por CNPJ
+    cliente_cnpj = st.text_input("👤 CNPJ do Cliente (filtro inicial)", value="03693136000112")
 with col2:
     hoje = datetime.now()
     inicio_mes_passado = (hoje.replace(day=1) - timedelta(days=1)).replace(day=1)
@@ -233,7 +233,6 @@ if st.button("🚀 Gerar Relatório", type="primary"):
     dados_empenhos, erro_empenhos = buscar_dados_api(token, "empenhos?expand=contrato.empresa,grupo")
     dados_contratos, erro_contratos = buscar_dados_api(token, "contratos")
     
-    # A busca de transações agora mostra o progresso dentro da sua própria função
     dados_transacoes, erro_transacoes = buscar_transacoes_em_partes(token, data_inicio, data_fim)
 
     erros = [e for e in [erro_faturas, erro_empenhos, erro_transacoes, erro_contratos] if e]
@@ -242,12 +241,17 @@ if st.button("🚀 Gerar Relatório", type="primary"):
             st.error(erro)
     else:
         with st.spinner("Processando e cruzando todos os dados..."):
-            faturas_filtradas = [f for f in dados_faturas if cliente_principal.upper() in f.get('cliente',{}).get('nome','').upper()]
+            # Lógica de filtro por CNPJ
+            clean_cnpj_input = re.sub(r'[^\d]', '', cliente_cnpj)
+            faturas_filtradas = [
+                f for f in dados_faturas 
+                if re.sub(r'[^\d]', '', f.get('cliente', {}).get('cnpj', '')) == clean_cnpj_input
+            ]
             
             dados_finais = processar_dados_completos(faturas_filtradas, dados_empenhos, dados_transacoes, dados_contratos)
         
         if not dados_finais:
-            st.warning(f"Nenhuma fatura encontrada para o cliente '{cliente_principal}'.")
+            st.warning(f"Nenhuma fatura encontrada para o cliente com CNPJ '{cliente_cnpj}'.")
         else:
             st.success(f"Dados processados! {len(dados_finais)} relatórios gerados.")
             st.markdown("---")
@@ -270,6 +274,6 @@ if st.button("🚀 Gerar Relatório", type="primary"):
             st.download_button(
                 label="📥 Baixar Relatório Completo (.txt)",
                 data=texto_completo_para_download.encode('utf-8'),
-                file_name=f"Relatorio_{cliente_principal.replace(' ', '_')}_{hoje.strftime('%Y-%m-%d')}.txt",
+                file_name=f"Relatorio_{cliente_cnpj}_{hoje.strftime('%Y-%m-%d')}.txt",
                 mime='text/plain'
             )
