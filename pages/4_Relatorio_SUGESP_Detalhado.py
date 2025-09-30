@@ -87,7 +87,7 @@ def buscar_transacoes_em_partes(token, data_inicio, data_fim, chunk_days=7):
 
 def processar_relatorio_com_base_nas_transacoes(faturas, transacoes, empenhos, contratos, produtos, dados_bancarios, info_empresa, data_inicio, taxa_adicional, vencimento_manual):
     """
-    LÓGICA APRIMORADA: Gera relatórios com base nas transações, aplicando taxa adicional e data de vencimento manual.
+    LÓGICA AJUSTADA: Gera relatórios com base nas transações, aplicando taxa mas sem exibi-la explicitamente.
     """
     mapa_produtos = {p['id']: p['nome'] for p in produtos}
     mapa_contratos = {c['id']: c for c in contratos}
@@ -111,7 +111,6 @@ def processar_relatorio_com_base_nas_transacoes(faturas, transacoes, empenhos, c
             nome_secretaria = grupo_info['nome']
             secretarias[nome_secretaria].append(t)
 
-    # Usa a data de vencimento manual. Se não for informada, busca na API.
     if vencimento_manual:
         vencimento = vencimento_manual.strftime('%d/%m/%Y')
     else:
@@ -133,10 +132,8 @@ def processar_relatorio_com_base_nas_transacoes(faturas, transacoes, empenhos, c
         valor_bruto = sum(float(t.get('valor_total', 0)) for t in transacoes_da_secretaria)
         ir_retido = sum(float(t.get('imposto_renda', 0)) for t in transacoes_da_secretaria)
         
-        # Calcula a taxa adicional
         valor_taxa_adicional = valor_bruto * (taxa_adicional / 100.0)
         
-        # Recalcula o valor líquido e a taxa negativa
         valor_liquido_original = sum(float(t.get('valor_liquido_cliente', 0)) for t in transacoes_da_secretaria)
         valor_liquido_final = valor_liquido_original - valor_taxa_adicional
         taxa_negativa = valor_bruto - valor_liquido_final
@@ -174,14 +171,13 @@ def processar_relatorio_com_base_nas_transacoes(faturas, transacoes, empenhos, c
             numero_contrato = mapa_contratos[contrato_id_transacao].get('numero', 'N/A')
         objeto_contrato = f"(Termo Contrato nº {numero_contrato})."
 
-        # Adiciona a nova taxa ao relatório
+        # A linha da "Taxa Adicional" foi removida desta string final
         texto_relatorio = (
             f"({nome_secretaria}) | "
             f"Valor Bruto: R$ {valor_bruto:,.2f} | "
             f"Taxa Negativa: -R$ {taxa_negativa:,.2f} | "
             f"Valor Líquido: R$ {valor_liquido_final:,.2f} | "
             f"IR Retido: R$ {ir_retido:,.2f} | "
-            f"Taxa Adicional ({taxa_adicional}%): R$ {valor_taxa_adicional:,.2f} | "
             f"Período: {periodo} | "
             f"Empenho: {empenhos_str} | "
             f"Vencimento: {vencimento} | "
@@ -221,7 +217,7 @@ with col_a:
     st.markdown("##### Dados da Empresa e Taxas")
     nome_empresa = st.text_input("Nome da Empresa", "Uzzipay Administradora de Convênios Ltda.")
     cnpj_empresa = st.text_input("CNPJ", "05.884.660/0001-04")
-    taxa_adicional = st.number_input("Taxa Adicional (%)", min_value=0.0, value=0.0, step=0.1, format="%.2f", help="Taxa a ser calculada sobre o valor bruto.")
+    taxa_adicional = st.number_input("Taxa Adicional (%)", min_value=0.0, value=0.0, step=0.1, format="%.2f", help="Taxa a ser calculada sobre o valor bruto. O valor será ajustado no líquido, mas não aparecerá como um item separado.")
 
 with col_b:
     st.markdown("##### Dados Bancários e Vencimento")
