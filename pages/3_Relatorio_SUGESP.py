@@ -1,7 +1,6 @@
 # pages/3_Relatorio_SUGESP.py
 import sys
 import os
-import re
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 import streamlit as st
@@ -10,6 +9,7 @@ import requests
 from datetime import datetime, timedelta
 from collections import defaultdict
 import io
+import re
 
 # --- 1. CONFIGURAÇÃO DA PÁGINA E AUTENTICAÇÃO ---
 st.set_page_config(
@@ -50,7 +50,7 @@ def buscar_dados_api(token, endpoint):
     except requests.exceptions.RequestException as e:
         return None, f"Erro de conexão com o endpoint '{endpoint}': {e}"
 
-def buscar_transacoes_em_partes(token, data_inicio, data_fim, chunk_days=8): # Dividido em ~4 partes
+def buscar_transacoes_em_partes(token, data_inicio, data_fim, chunk_days=8):
     """
     Busca transações em pedaços menores para evitar erro 500 em grandes volumes de dados.
     """
@@ -206,7 +206,6 @@ st.subheader("1. Parâmetros da Consulta")
 col1, col2 = st.columns(2)
 with col1:
     token = st.text_input("🔑 Token de Autenticação", type="password")
-    # Alterado para buscar por CNPJ
     cliente_cnpj = st.text_input("👤 CNPJ do Cliente (filtro inicial)", value="03693136000112")
 with col2:
     hoje = datetime.now()
@@ -241,7 +240,6 @@ if st.button("🚀 Gerar Relatório", type="primary"):
             st.error(erro)
     else:
         with st.spinner("Processando e cruzando todos os dados..."):
-            # Lógica de filtro por CNPJ
             clean_cnpj_input = re.sub(r'[^\d]', '', cliente_cnpj)
             faturas_filtradas = [
                 f for f in dados_faturas 
