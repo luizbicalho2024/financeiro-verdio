@@ -1,6 +1,7 @@
 # pages/3_Relatorio_SUGESP.py
 import sys
 import os
+import re
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 import streamlit as st
@@ -9,7 +10,6 @@ import requests
 from datetime import datetime, timedelta
 from collections import defaultdict
 import io
-import re
 
 # --- 1. CONFIGURAÇÃO DA PÁGINA E AUTENTICAÇÃO ---
 st.set_page_config(
@@ -92,7 +92,6 @@ def buscar_transacoes_em_partes(token, data_inicio, data_fim, chunk_days=8):
     progress_bar.empty()
     return todas_transacoes, None
 
-
 def processar_dados_completos(dados_faturas, dados_empenhos, dados_transacoes, dados_contratos):
     """
     Orquestra o processamento e cruzamento de todas as fontes de dados.
@@ -108,8 +107,9 @@ def processar_dados_completos(dados_faturas, dados_empenhos, dados_transacoes, d
             mapa_empenhos[e['grupo_id']].append(e['numero_empenho'])
 
     df_transacoes = pd.json_normalize(dados_transacoes)
+    # CORREÇÃO: Lógica mais robusta para obter o ID da unidade (grupo) da transação
+    df_transacoes['grupo_id'] = df_transacoes['informacao.search.subgrupo.id'].fillna(df_transacoes['informacao.search.grupo.id'])
     df_transacoes.rename(columns={
-        'informacao.search.subgrupo.id': 'grupo_id',
         'informacao.produto.nome': 'Produto',
         'valor_total': 'Valor Bruto',
         'imposto_renda': 'IR Retido'
@@ -121,11 +121,12 @@ def processar_dados_completos(dados_faturas, dados_empenhos, dados_transacoes, d
     relatorios_finais = {}
     
     for fatura in dados_faturas:
-        grupo_id = fatura.get('grupo_id')
+        # CORREÇÃO: Pega o ID da unidade diretamente do objeto 'grupo' aninhado, que é mais confiável.
+        grupo_id = fatura.get('grupo', {}).get('id')
         if not grupo_id:
             continue
             
-        secretaria_nome = fatura.get('grupo', {}).get('grupo', {}).get('nome', 'Secretaria Desconhecida')
+        secretaria_nome = fatura.get('grupo', {}).get('nome', 'Secretaria Desconhecida')
         
         data_inicio_apuracao = pd.to_datetime(fatura['inicio_apuracao']).date()
         data_fim_apuracao = pd.to_datetime(fatura['fim_apuracao']).date()
