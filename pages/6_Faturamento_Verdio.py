@@ -10,7 +10,7 @@ import io
 import user_management_db as umdb
 from fpdf import FPDF
 
-# --- NOVA CLASSE PARA GERAR PDF COM IDENTIDADE VISUAL ---
+# --- CLASSE PARA GERAR PDF COM IDENTIDADE VISUAL (AJUSTADA) ---
 class PDF(FPDF):
     """
     Classe customizada para gerar PDFs com cabeçalho e rodapé padrão da Uzzipay.
@@ -20,10 +20,10 @@ class PDF(FPDF):
         Adiciona o cabeçalho com o logo da Uzzipay Soluções em todas as páginas.
         """
         try:
-            # Largura da página menos as margens
             page_width = self.w - 2 * self.l_margin
-            # Adiciona a imagem do cabeçalho
-            self.image("imgs/header1.png", x=self.l_margin, y=8, w=page_width, h=25)
+            # Adiciona a imagem do cabeçalho especificando apenas a largura.
+            # A altura será calculada automaticamente para manter a proporção.
+            self.image("imgs/header1.png", x=self.l_margin, y=8, w=page_width)
             # Adiciona um espaço vertical após o cabeçalho
             self.ln(30)
         except Exception:
@@ -40,8 +40,9 @@ class PDF(FPDF):
             # Posiciona o cursor a 3 cm da parte inferior da página
             self.set_y(-30)
             page_width = self.w - 2 * self.l_margin
-            # Adiciona a imagem do rodapé
-            self.image("imgs/footer1.png", x=self.l_margin, y=self.get_y(), w=page_width, h=20)
+            # Adiciona a imagem do rodapé especificando apenas a largura.
+            # A altura será calculada automaticamente para manter a proporção.
+            self.image("imgs/footer1.png", x=self.l_margin, y=self.get_y(), w=page_width)
         except Exception:
             # Fallback caso a imagem não seja encontrada
             self.set_y(-15)
