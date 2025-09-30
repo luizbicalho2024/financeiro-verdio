@@ -87,8 +87,7 @@ def buscar_transacoes_em_partes(token, data_inicio, data_fim, chunk_days=7):
 
 def processar_relatorio_com_base_nas_transacoes(faturas, transacoes, empenhos, contratos, produtos, dados_bancarios, info_empresa, data_inicio):
     """
-    NOVA LÓGICA: Gera relatórios agregando dados a partir das transações,
-    que contêm a informação de grupo/secretaria.
+    LÓGICA CORRIGIDA: Gera relatórios agregando dados a partir das transações e tratando casos onde a fatura não é encontrada.
     """
     mapa_produtos = {p['id']: p['nome'] for p in produtos}
     mapa_contratos = {c['id']: c for c in contratos}
@@ -97,7 +96,6 @@ def processar_relatorio_com_base_nas_transacoes(faturas, transacoes, empenhos, c
 
     CNPJ_PRINCIPAL = "03693136000112"
 
-    # Filtra transações apenas do cliente principal (SUGESP)
     transacoes_sugesp = [
         t for t in transacoes 
         if t.get('informacao', {}).get('cliente', {}).get('cnpj') == CNPJ_PRINCIPAL
@@ -106,16 +104,13 @@ def processar_relatorio_com_base_nas_transacoes(faturas, transacoes, empenhos, c
         st.warning("Nenhuma transação encontrada para o cliente SUGESP no período selecionado.")
         return []
 
-    # Agrupa transações por secretaria
     secretarias = defaultdict(list)
     for t in transacoes_sugesp:
-        # A informação da secretaria está em 'informacao.search.grupo.nome'
         grupo_info = t.get('informacao', {}).get('search', {}).get('grupo', {})
         if grupo_info and 'nome' in grupo_info:
             nome_secretaria = grupo_info['nome']
             secretarias[nome_secretaria].append(t)
 
-    # Encontra uma fatura geral para pegar dados comuns como vencimento
     mes_referencia = data_inicio.month
     ano_referencia = data_inicio.year
     fatura_geral = next((
@@ -130,11 +125,9 @@ def processar_relatorio_com_base_nas_transacoes(faturas, transacoes, empenhos, c
     vencimento = datetime.strptime(fatura_geral['liquidacao_prevista'], '%Y-%m-%d %H:%M:%S').strftime('%d/%m/%Y')
     periodo = data_inicio.strftime('%B/%Y').capitalize()
 
-    # Processa cada secretaria
     for nome_secretaria, transacoes_da_secretaria in secretarias.items():
         valor_bruto = sum(float(t.get('valor_total', 0)) for t in transacoes_da_secretaria)
         ir_retido = sum(float(t.get('imposto_renda', 0)) for t in transacoes_da_secretaria)
-        # O valor líquido para o cliente já está na transação
         valor_liquido = sum(float(t.get('valor_liquido_cliente', 0)) for t in transacoes_da_secretaria)
         taxa_negativa = valor_bruto - valor_liquido
         
@@ -156,11 +149,13 @@ def processar_relatorio_com_base_nas_transacoes(faturas, transacoes, empenhos, c
 
         empenhos_str = ", ".join(sorted([mapa_empenhos[eid] for eid in empenhos_usados_ids if eid in mapa_empenhos])) or "N/A"
         
-        # Assume que o contrato é o mesmo para todas as transações de uma secretaria
         primeira_transacao = transacoes_da_secretaria[0]
         contrato_id_transacao = primeira_transacao.get('contrato_id')
-        if not contrato_id_transacao and 'faturamento_id_cliente' in primeira_transacao:
-            fatura_da_transacao = next((f for f in faturas if f['id'] == primeira_transacao['faturamento_id_cliente']), None)
+        
+        # LÓGICA DE CORREÇÃO DO ERRO
+        if not contrato_id_transacao and primeira_transacao.get('faturamento_id_cliente'):
+            fatura_da_transacao = next((f for f in faturas if f.get('id') == primeira_transacao['faturamento_id_cliente']), None)
+            # Adiciona uma verificação para garantir que a fatura foi encontrada antes de acessá-la
             if fatura_da_transacao:
                 contrato_id_transacao = fatura_da_transacao.get('configuracao', {}).get('contrato_id')
 
@@ -197,7 +192,6 @@ st.subheader("1. Configurações da Consulta")
 token = st.text_input("🔑 Token de Autenticação da API", type="password", help="Insira seu token Bearer para acessar os dados.")
 
 col1, col2 = st.columns(2)
-# Define o período padrão para o mês anterior
 hoje = datetime.now()
 primeiro_dia_mes_atual = hoje.replace(day=1)
 ultimo_dia_mes_anterior = primeiro_dia_mes_atual - timedelta(days=1)
