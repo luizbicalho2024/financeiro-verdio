@@ -85,9 +85,9 @@ def buscar_transacoes_em_partes(token, data_inicio, data_fim, chunk_days=7):
     progress_bar.success("Coleta de transações concluída!")
     return todas_transacoes
 
-def processar_relatorio_com_base_nas_transacoes(faturas, transacoes, empenhos, contratos, produtos, dados_bancarios, info_empresa, data_inicio):
+def processar_relatorio_com_base_nas_transacoes(faturas, transacoes, empenhos, contratos, produtos, dados_bancarios, info_empresa, data_inicio, taxa_adicional, vencimento_manual):
     """
-    LÓGICA FINAL: Gera relatórios agregando dados a partir das transações e tratando casos onde a fatura ou a configuração são nulas.
+    LÓGICA APRIMORADA: Gera relatórios com base nas transações, aplicando taxa adicional e data de vencimento manual.
     """
     mapa_produtos = {p['id']: p['nome'] for p in produtos}
     mapa_contratos = {c['id']: c for c in contratos}
@@ -111,25 +111,35 @@ def processar_relatorio_com_base_nas_transacoes(faturas, transacoes, empenhos, c
             nome_secretaria = grupo_info['nome']
             secretarias[nome_secretaria].append(t)
 
-    mes_referencia = data_inicio.month
-    ano_referencia = data_inicio.year
-    fatura_geral = next((
-        f for f in faturas 
-        if f.get('cliente') and f['cliente']['cnpj'] == CNPJ_PRINCIPAL and f.get('mes_referencia') == mes_referencia and f.get('ano_referencia') == ano_referencia
-    ), None)
+    # Usa a data de vencimento manual. Se não for informada, busca na API.
+    if vencimento_manual:
+        vencimento = vencimento_manual.strftime('%d/%m/%Y')
+    else:
+        mes_referencia = data_inicio.month
+        ano_referencia = data_inicio.year
+        fatura_geral = next((
+            f for f in faturas 
+            if f.get('cliente') and f['cliente']['cnpj'] == CNPJ_PRINCIPAL and f.get('mes_referencia') == mes_referencia and f.get('ano_referencia') == ano_referencia
+        ), None)
 
-    if not fatura_geral:
-        st.warning(f"Nenhuma fatura geral da SUGESP encontrada para o período de {data_inicio.strftime('%B/%Y')}. Não é possível determinar o vencimento.")
-        return []
-
-    vencimento = datetime.strptime(fatura_geral['liquidacao_prevista'], '%Y-%m-%d %H:%M:%S').strftime('%d/%m/%Y')
+        if not fatura_geral:
+            st.warning(f"Nenhuma fatura geral da SUGESP encontrada para o período. A data de vencimento não pôde ser definida automaticamente.")
+            return []
+        vencimento = datetime.strptime(fatura_geral['liquidacao_prevista'], '%Y-%m-%d %H:%M:%S').strftime('%d/%m/%Y')
+        
     periodo = data_inicio.strftime('%B/%Y').capitalize()
 
     for nome_secretaria, transacoes_da_secretaria in secretarias.items():
         valor_bruto = sum(float(t.get('valor_total', 0)) for t in transacoes_da_secretaria)
         ir_retido = sum(float(t.get('imposto_renda', 0)) for t in transacoes_da_secretaria)
-        valor_liquido = sum(float(t.get('valor_liquido_cliente', 0)) for t in transacoes_da_secretaria)
-        taxa_negativa = valor_bruto - valor_liquido
+        
+        # Calcula a taxa adicional
+        valor_taxa_adicional = valor_bruto * (taxa_adicional / 100.0)
+        
+        # Recalcula o valor líquido e a taxa negativa
+        valor_liquido_original = sum(float(t.get('valor_liquido_cliente', 0)) for t in transacoes_da_secretaria)
+        valor_liquido_final = valor_liquido_original - valor_taxa_adicional
+        taxa_negativa = valor_bruto - valor_liquido_final
         
         consumo_por_produto = defaultdict(lambda: {'valor_bruto': 0.0, 'irrf': 0.0})
         empenhos_usados_ids = set()
@@ -152,12 +162,11 @@ def processar_relatorio_com_base_nas_transacoes(faturas, transacoes, empenhos, c
         primeira_transacao = transacoes_da_secretaria[0]
         contrato_id_transacao = primeira_transacao.get('contrato_id')
         
-        # LÓGICA DE CORREÇÃO FINAL
         if not contrato_id_transacao and primeira_transacao.get('faturamento_id_cliente'):
             fatura_da_transacao = next((f for f in faturas if f.get('id') == primeira_transacao['faturamento_id_cliente']), None)
             if fatura_da_transacao:
                 configuracao = fatura_da_transacao.get('configuracao')
-                if configuracao: # Verifica se a configuração não é nula
+                if configuracao:
                     contrato_id_transacao = configuracao.get('contrato_id')
 
         numero_contrato = "N/A"
@@ -165,12 +174,14 @@ def processar_relatorio_com_base_nas_transacoes(faturas, transacoes, empenhos, c
             numero_contrato = mapa_contratos[contrato_id_transacao].get('numero', 'N/A')
         objeto_contrato = f"(Termo Contrato nº {numero_contrato})."
 
+        # Adiciona a nova taxa ao relatório
         texto_relatorio = (
             f"({nome_secretaria}) | "
             f"Valor Bruto: R$ {valor_bruto:,.2f} | "
             f"Taxa Negativa: -R$ {taxa_negativa:,.2f} | "
-            f"Valor Líquido: R$ {valor_liquido:,.2f} | "
+            f"Valor Líquido: R$ {valor_liquido_final:,.2f} | "
             f"IR Retido: R$ {ir_retido:,.2f} | "
+            f"Taxa Adicional ({taxa_adicional}%): R$ {valor_taxa_adicional:,.2f} | "
             f"Período: {periodo} | "
             f"Empenho: {empenhos_str} | "
             f"Vencimento: {vencimento} | "
@@ -199,22 +210,26 @@ ultimo_dia_mes_anterior = primeiro_dia_mes_atual - timedelta(days=1)
 primeiro_dia_mes_anterior = ultimo_dia_mes_anterior.replace(day=1)
 
 with col1:
-    data_inicio = st.date_input("🗓️ Data de Início (para transações)", primeiro_dia_mes_anterior)
+    data_inicio = st.date_input("🗓️ Data de Início (Período)", primeiro_dia_mes_anterior)
 with col2:
-    data_fim = st.date_input("🗓️ Data de Fim (para transações)", ultimo_dia_mes_anterior)
+    data_fim = st.date_input("🗓️ Data de Fim (Período)", ultimo_dia_mes_anterior)
 
 st.markdown("---")
-st.subheader("2. Informações Manuais (Padrão)")
+st.subheader("2. Informações Manuais e Ajustes")
 col_a, col_b = st.columns(2)
 with col_a:
-    st.markdown("##### Dados da Empresa")
+    st.markdown("##### Dados da Empresa e Taxas")
     nome_empresa = st.text_input("Nome da Empresa", "Uzzipay Administradora de Convênios Ltda.")
     cnpj_empresa = st.text_input("CNPJ", "05.884.660/0001-04")
+    taxa_adicional = st.number_input("Taxa Adicional (%)", min_value=0.0, value=0.0, step=0.1, format="%.2f", help="Taxa a ser calculada sobre o valor bruto.")
+
 with col_b:
-    st.markdown("##### Dados Bancários")
+    st.markdown("##### Dados Bancários e Vencimento")
     banco = st.text_input("Banco", "552")
     agencia = st.text_input("Agência", "0001")
     conta = st.text_input("Conta Corrente", "20-5")
+    vencimento_manual = st.date_input("Data de Vencimento (Manual)", None, help="Deixe em branco para usar a data da API.")
+
 
 if st.button("🚀 Gerar Relatórios", type="primary"):
     if not token:
@@ -236,7 +251,7 @@ if st.button("🚀 Gerar Relatórios", type="primary"):
 
                 relatorios = processar_relatorio_com_base_nas_transacoes(
                     faturas, transacoes, empenhos, contratos, produtos,
-                    dados_bancarios, info_empresa, data_inicio
+                    dados_bancarios, info_empresa, data_inicio, taxa_adicional, vencimento_manual
                 )
             
             st.markdown("---")
