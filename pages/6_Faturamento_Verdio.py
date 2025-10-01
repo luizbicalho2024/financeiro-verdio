@@ -124,28 +124,32 @@ def processar_planilha_faturamento(file_bytes, valor_gprs, valor_satelital):
         df_restantes = df[df['Data Desativação'].isna()].copy()
         
         # 2. Terminais ATIVADOS no mês (cobrança proporcional)
-        # CORREÇÃO: Compara MÊS e ANO para garantir que a ativação foi no período correto
+        # CORREÇÃO: Compara MÊS/ANO e verifica se os dias ativos são menores que os dias do mês
+        # para evitar classificar erroneamente um faturamento cheio como proporcional.
         ativados_mask = (df_restantes['Data Ativação'].dt.month == report_month) & \
-                        (df_restantes['Data Ativação'].dt.year == report_year)
+                        (df_restantes['Data Ativação'].dt.year == report_year) & \
+                        (df_restantes['Dias Ativos Mês'] < dias_no_mes)
         df_ativados = df_restantes[ativados_mask].copy()
         if not df_ativados.empty:
-            # CORREÇÃO: Fórmula de cálculo dos dias a faturar
+            # A fórmula para ativação proporcional está correta, usando o dia da ativação
             df_ativados['Dias a Faturar'] = ((dias_no_mes - df_ativados['Data Ativação'].dt.day + 1) - df_ativados['Suspenso Dias Mes']).clip(lower=0)
             df_ativados['Valor a Faturar'] = (df_ativados['Valor Unitario'] / dias_no_mes) * df_ativados['Dias a Faturar']
         
-        # Isola os terminais que não foram ativados no mês
+        # Isola os terminais que não foram ativados no mês para faturamento proporcional
         df_nao_ativados_no_mes = df_restantes.drop(df_ativados.index)
 
         # 3. Terminais SUSPENSOS (cobrança proporcional pelos dias ativos)
         suspensos_mask = df_nao_ativados_no_mes['Condição'].str.strip() == 'Suspenso'
         df_suspensos = df_nao_ativados_no_mes[suspensos_mask].copy()
         if not df_suspensos.empty:
+            # O cálculo correto é baseado nos dias ativos menos os dias suspensos
             df_suspensos['Dias a Faturar'] = (df_suspensos['Dias Ativos Mês'] - df_suspensos['Suspenso Dias Mes']).clip(lower=0)
             df_suspensos['Valor a Faturar'] = (df_suspensos['Valor Unitario'] / dias_no_mes) * df_suspensos['Dias a Faturar']
         
         # 4. Terminais com faturamento CHEIO (o que sobrou)
         df_cheio = df_nao_ativados_no_mes.drop(df_suspensos.index).copy()
         if not df_cheio.empty:
+            # O cálculo correto é baseado nos dias ativos menos os dias suspensos
             df_cheio['Dias a Faturar'] = (df_cheio['Dias Ativos Mês'] - df_cheio['Suspenso Dias Mes']).clip(lower=0)
             df_cheio['Valor a Faturar'] = (df_cheio['Valor Unitario'] / dias_no_mes) * df_cheio['Dias a Faturar']
 
