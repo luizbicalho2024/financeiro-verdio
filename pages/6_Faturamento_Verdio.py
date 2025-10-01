@@ -93,48 +93,58 @@ def processar_planilha_faturamento(file_bytes, valor_gprs, valor_satelital):
         df['Dias Ativos Mês'] = pd.to_numeric(df['Dias Ativos Mês'], errors='coerce').fillna(0)
         df['Suspenso Dias Mes'] = pd.to_numeric(df['Suspenso Dias Mes'], errors='coerce').fillna(0)
 
+        # Determina o mês e ano do relatório a partir de uma data válida no arquivo
+        report_date = pd.NaT
         if not df[df['Data Desativação'].notna()].empty:
             report_date = df[df['Data Desativação'].notna()]['Data Desativação'].iloc[0]
         elif not df[df['Data Ativação'].notna()].empty:
             report_date = df[df['Data Ativação'].notna()]['Data Ativação'].iloc[0]
-        else:
-            report_date = datetime.now()
         
-        mes_ingles = report_date.strftime("%B")
-        mes_portugues = meses_pt.get(mes_ingles, mes_ingles)
-        ano = report_date.strftime("%Y")
-        periodo_relatorio = f"{mes_portugues} de {ano}"
+        if pd.isna(report_date):
+            report_date = datetime.now()
 
         report_month = report_date.month
         report_year = report_date.year
         dias_no_mes = pd.Timestamp(year=report_year, month=report_month, day=1).days_in_month
+        
+        mes_ingles = report_date.strftime("%B")
+        mes_portugues = meses_pt.get(mes_ingles, mes_ingles)
+        periodo_relatorio = f"{mes_portugues} de {report_year}"
 
         df['Tipo'] = df['Nº Equipamento'].apply(lambda x: 'Satelital' if len(str(x).strip()) == 8 else 'GPRS')
         df['Valor Unitario'] = df['Tipo'].apply(lambda x: valor_satelital if x == 'Satelital' else valor_gprs)
 
+        # 1. Terminais DESATIVADOS no mês (cobrança proporcional)
         df_desativados = df[df['Data Desativação'].notna()].copy()
         if not df_desativados.empty:
             df_desativados['Dias a Faturar'] = (df_desativados['Data Desativação'].dt.day - df_desativados['Suspenso Dias Mes']).clip(lower=0)
             df_desativados['Valor a Faturar'] = (df_desativados['Valor Unitario'] / dias_no_mes) * df_desativados['Dias a Faturar']
 
+        # Isola os terminais que não foram desativados
         df_restantes = df[df['Data Desativação'].isna()].copy()
-
-        df_ativados = df_restantes[
-            (df_restantes['Condição'].str.strip() == 'Ativado') &
-            (df_restantes['Data Ativação'].dt.month == report_month) &
-            (df_restantes['Data Ativação'].dt.year == report_year)
-        ].copy()
+        
+        # 2. Terminais ATIVADOS no mês (cobrança proporcional)
+        # CORREÇÃO: Compara MÊS e ANO para garantir que a ativação foi no período correto
+        ativados_mask = (df_restantes['Data Ativação'].dt.month == report_month) & \
+                        (df_restantes['Data Ativação'].dt.year == report_year)
+        df_ativados = df_restantes[ativados_mask].copy()
         if not df_ativados.empty:
+            # CORREÇÃO: Fórmula de cálculo dos dias a faturar
             df_ativados['Dias a Faturar'] = ((dias_no_mes - df_ativados['Data Ativação'].dt.day + 1) - df_ativados['Suspenso Dias Mes']).clip(lower=0)
             df_ativados['Valor a Faturar'] = (df_ativados['Valor Unitario'] / dias_no_mes) * df_ativados['Dias a Faturar']
         
-        df_suspensos = df_restantes[df_restantes['Condição'].str.strip() == 'Suspenso'].copy()
+        # Isola os terminais que não foram ativados no mês
+        df_nao_ativados_no_mes = df_restantes.drop(df_ativados.index)
+
+        # 3. Terminais SUSPENSOS (cobrança proporcional pelos dias ativos)
+        suspensos_mask = df_nao_ativados_no_mes['Condição'].str.strip() == 'Suspenso'
+        df_suspensos = df_nao_ativados_no_mes[suspensos_mask].copy()
         if not df_suspensos.empty:
             df_suspensos['Dias a Faturar'] = (df_suspensos['Dias Ativos Mês'] - df_suspensos['Suspenso Dias Mes']).clip(lower=0)
             df_suspensos['Valor a Faturar'] = (df_suspensos['Valor Unitario'] / dias_no_mes) * df_suspensos['Dias a Faturar']
-
-        indices_para_remover = df_ativados.index.union(df_suspensos.index)
-        df_cheio = df_restantes.drop(indices_para_remover).copy()
+        
+        # 4. Terminais com faturamento CHEIO (o que sobrou)
+        df_cheio = df_nao_ativados_no_mes.drop(df_suspensos.index).copy()
         if not df_cheio.empty:
             df_cheio['Dias a Faturar'] = (df_cheio['Dias Ativos Mês'] - df_cheio['Suspenso Dias Mes']).clip(lower=0)
             df_cheio['Valor a Faturar'] = (df_cheio['Valor Unitario'] / dias_no_mes) * df_cheio['Dias a Faturar']
@@ -261,7 +271,6 @@ def create_pdf_report(nome_cliente, periodo, totais, df_cheio, df_ativados, df_d
     cols_desativados = ['Terminal', 'Nº Equipamento', 'Placa', 'Tipo', 'Data Desativação', 'Dias Ativos Mês', 'Suspenso Dias Mes', 'Dias a Faturar', 'Valor Unitario', 'Valor a Faturar']
     draw_table("Detalhamento Proporcional (Desativações no Mês)", df_desativados, widths_proporcional, cols_desativados, header_map)
 
-    # CORREÇÃO: Usa as larguras da tabela proporcional para a tabela de suspensos
     cols_suspensos = ['Terminal', 'Nº Equipamento', 'Placa', 'Tipo', 'Data Ativação', 'Dias Ativos Mês', 'Suspenso Dias Mes', 'Dias a Faturar', 'Valor Unitario', 'Valor a Faturar']
     draw_table("Detalhamento dos Terminais Suspensos (Faturamento Prop.)", df_suspensos, widths_proporcional, cols_suspensos, header_map)
     
@@ -338,10 +347,13 @@ if uploaded_file:
             df_total = pd.concat([df_cheio, df_ativados, df_desativados, df_suspensos])
             total_gprs = len(df_total[df_total['Tipo'] == 'GPRS'])
             total_satelital = len(df_total[df_total['Tipo'] == 'Satelital'])
+            
+            # Ajusta a contagem de terminais proporcionais para incluir os suspensos faturados
+            num_terminais_proporcional = len(df_ativados) + len(df_desativados)
 
             col1, col2, col3, col4, col5 = st.columns(5)
             col1.metric("Nº Fat. Cheio", value=len(df_cheio))
-            col2.metric("Nº Fat. Proporcional", value=len(df_ativados) + len(df_desativados))
+            col2.metric("Nº Fat. Proporcional", value=num_terminais_proporcional)
             col3.metric("Nº Suspensos", value=len(df_suspensos))
             col4.metric("Total GPRS", value=total_gprs)
             col5.metric("Total Satelitais", value=total_satelital)
@@ -357,14 +369,14 @@ if uploaded_file:
             excel_data = to_excel(df_cheio, df_ativados, df_desativados, df_suspensos)
             totais_pdf = {
                 "cheio": total_faturamento_cheio, "proporcional": faturamento_proporcional_total, "geral": faturamento_total_geral,
-                "terminais_cheio": len(df_cheio), "terminais_proporcional": len(df_ativados) + len(df_desativados) + len(df_suspensos),
+                "terminais_cheio": len(df_cheio), "terminais_proporcional": num_terminais_proporcional,
                 "terminais_suspensos": len(df_suspensos), "terminais_gprs": total_gprs, "terminais_satelitais": total_satelital
             }
             pdf_data = create_pdf_report(nome_cliente, periodo_relatorio, totais_pdf, df_cheio, df_ativados, df_desativados, df_suspensos)
             faturamento_data_log = {
                 "cliente": nome_cliente, "periodo_relatorio": periodo_relatorio,
                 "valor_total": faturamento_total_geral, "terminais_cheio": len(df_cheio),
-                "terminais_proporcional": len(df_ativados) + len(df_desativados) + len(df_suspensos),
+                "terminais_proporcional": num_terminais_proporcional,
                 "terminais_suspensos": len(df_suspensos),
                 "terminais_gprs": total_gprs, "terminais_satelitais": total_satelital,
                 "valor_unitario_gprs": valor_gprs, "valor_unitario_satelital": valor_satelital
@@ -410,7 +422,7 @@ if uploaded_file:
 
             with st.expander("Detalhamento do Faturamento Cheio"):
                 if not df_cheio.empty:
-                    st.dataframe(df_cheio[['Terminal', 'Nº Equipamento', 'Placa', 'Tipo', 'Valor a Faturar']], use_container_width=True, hide_index=True)
+                    st.dataframe(df_cheio[['Terminal', 'Nº Equipamento', 'Placa', 'Tipo', 'Dias a Faturar', 'Valor a Faturar']], use_container_width=True, hide_index=True)
                 else:
                     st.info("Nenhum terminal com faturamento cheio neste período.")
 
