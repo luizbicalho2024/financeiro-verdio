@@ -66,7 +66,8 @@ if st.sidebar.button("Logout"):
 @st.cache_data
 def processar_planilha_faturamento(file_bytes, valor_gprs, valor_satelital):
     """
-    Lê a planilha, extrai informações, classifica, calcula e retorna os dataframes de faturamento.
+    Lê a planilha, extrai a data de referência do cabeçalho, classifica,
+    calcula e retorna os dataframes de faturamento.
     """
     try:
         meses_pt = {
@@ -76,33 +77,44 @@ def processar_planilha_faturamento(file_bytes, valor_gprs, valor_satelital):
             "October": "Outubro", "November": "Novembro", "December": "Dezembro"
         }
 
-        uploaded_file = io.BytesIO(file_bytes)
-        df = pd.read_excel(uploaded_file, header=11, engine='openpyxl', dtype={'Equipamento': str})
+        # --- CORREÇÃO: Extrai a data de referência diretamente do cabeçalho do Excel ---
+        report_date = None
+        try:
+            df_header = pd.read_excel(io.BytesIO(file_bytes), header=None, engine='openpyxl', nrows=11)
+            report_date_str = None
+            for _, row in df_header.iterrows():
+                for cell in row:
+                    if isinstance(cell, str) and 'Data Inicial:' in cell:
+                        report_date_str = cell.split(':')[1].strip()
+                        break
+                if report_date_str:
+                    break
+            if report_date_str:
+                report_date = pd.to_datetime(report_date_str, dayfirst=True, errors='coerce')
+        except Exception:
+            # Se a leitura do cabeçalho falhar, a lógica de fallback abaixo será usada
+            pass
+
+        # Agora, lê o dataframe principal, pulando o cabeçalho
+        df = pd.read_excel(io.BytesIO(file_bytes), header=11, engine='openpyxl', dtype={'Equipamento': str})
         df = df.rename(columns={'Suspenso Dias Mês': 'Suspenso Dias Mes', 'Equipamento': 'Nº Equipamento'})
 
         required_cols = ['Cliente', 'Terminal', 'Data Ativação', 'Data Desativação', 'Dias Ativos Mês', 'Suspenso Dias Mes', 'Nº Equipamento', 'Condição']
         if not all(col in df.columns for col in required_cols):
             return None, None, None, None, None, None, "Erro de Colunas: Verifique o cabeçalho na linha 12."
 
-        nome_cliente = str(df['Cliente'].dropna().iloc[0]).strip() if not df.empty and 'Cliente' in df.columns else "Cliente não identificado"
-
-        df.dropna(subset=['Terminal'], inplace=True)
-        df['Terminal'] = df['Terminal'].astype(str).str.strip()
-        df['Data Ativação'] = pd.to_datetime(df['Data Ativação'], errors='coerce', dayfirst=True)
-        df['Data Desativação'] = pd.to_datetime(df['Data Desativação'], errors='coerce', dayfirst=True)
-        df['Dias Ativos Mês'] = pd.to_numeric(df['Dias Ativos Mês'], errors='coerce').fillna(0)
-        df['Suspenso Dias Mes'] = pd.to_numeric(df['Suspenso Dias Mes'], errors='coerce').fillna(0)
-
-        # Determina o mês e ano do relatório a partir de uma data válida no arquivo
-        report_date = pd.NaT
-        if not df[df['Data Desativação'].notna()].empty:
-            report_date = df[df['Data Desativação'].notna()]['Data Desativação'].iloc[0]
-        elif not df[df['Data Ativação'].notna()].empty:
-            report_date = df[df['Data Ativação'].notna()]['Data Ativação'].iloc[0]
-        
+        # Lógica de fallback se a data não foi encontrada no cabeçalho
         if pd.isna(report_date):
-            report_date = datetime.now()
-
+            st.warning("Não foi possível ler a 'Data Inicial' do cabeçalho do arquivo. O período será inferido a partir dos dados dos terminais.")
+            if not df[df['Data Desativação'].notna()].empty:
+                report_date = df[df['Data Desativação'].notna()]['Data Desativação'].iloc[0]
+            elif not df[df['Data Ativação'].notna()].empty:
+                report_date = df[df['Data Ativação'].notna()]['Data Ativação'].iloc[0]
+            
+            if pd.isna(report_date):
+                report_date = datetime.now()
+        
+        # O resto da função continua a partir daqui, usando a 'report_date' que foi determinada
         report_month = report_date.month
         report_year = report_date.year
         dias_no_mes = pd.Timestamp(year=report_year, month=report_month, day=1).days_in_month
@@ -110,6 +122,14 @@ def processar_planilha_faturamento(file_bytes, valor_gprs, valor_satelital):
         mes_ingles = report_date.strftime("%B")
         mes_portugues = meses_pt.get(mes_ingles, mes_ingles)
         periodo_relatorio = f"{mes_portugues} de {report_year}"
+        
+        nome_cliente = str(df['Cliente'].dropna().iloc[0]).strip() if not df.empty and 'Cliente' in df.columns else "Cliente não identificado"
+        df.dropna(subset=['Terminal'], inplace=True)
+        df['Terminal'] = df['Terminal'].astype(str).str.strip()
+        df['Data Ativação'] = pd.to_datetime(df['Data Ativação'], errors='coerce', dayfirst=True)
+        df['Data Desativação'] = pd.to_datetime(df['Data Desativação'], errors='coerce', dayfirst=True)
+        df['Dias Ativos Mês'] = pd.to_numeric(df['Dias Ativos Mês'], errors='coerce').fillna(0)
+        df['Suspenso Dias Mes'] = pd.to_numeric(df['Suspenso Dias Mes'], errors='coerce').fillna(0)
 
         df['Tipo'] = df['Nº Equipamento'].apply(lambda x: 'Satelital' if len(str(x).strip()) == 8 else 'GPRS')
         df['Valor Unitario'] = df['Tipo'].apply(lambda x: valor_satelital if x == 'Satelital' else valor_gprs)
@@ -124,14 +144,11 @@ def processar_planilha_faturamento(file_bytes, valor_gprs, valor_satelital):
         df_restantes = df[df['Data Desativação'].isna()].copy()
         
         # 2. Terminais ATIVADOS no mês (cobrança proporcional)
-        # CORREÇÃO: Compara MÊS/ANO e verifica se os dias ativos são menores que os dias do mês
-        # para evitar classificar erroneamente um faturamento cheio como proporcional.
         ativados_mask = (df_restantes['Data Ativação'].dt.month == report_month) & \
                         (df_restantes['Data Ativação'].dt.year == report_year) & \
                         (df_restantes['Dias Ativos Mês'] < dias_no_mes)
         df_ativados = df_restantes[ativados_mask].copy()
         if not df_ativados.empty:
-            # A fórmula para ativação proporcional está correta, usando o dia da ativação
             df_ativados['Dias a Faturar'] = ((dias_no_mes - df_ativados['Data Ativação'].dt.day + 1) - df_ativados['Suspenso Dias Mes']).clip(lower=0)
             df_ativados['Valor a Faturar'] = (df_ativados['Valor Unitario'] / dias_no_mes) * df_ativados['Dias a Faturar']
         
@@ -142,14 +159,12 @@ def processar_planilha_faturamento(file_bytes, valor_gprs, valor_satelital):
         suspensos_mask = df_nao_ativados_no_mes['Condição'].str.strip() == 'Suspenso'
         df_suspensos = df_nao_ativados_no_mes[suspensos_mask].copy()
         if not df_suspensos.empty:
-            # O cálculo correto é baseado nos dias ativos menos os dias suspensos
             df_suspensos['Dias a Faturar'] = (df_suspensos['Dias Ativos Mês'] - df_suspensos['Suspenso Dias Mes']).clip(lower=0)
             df_suspensos['Valor a Faturar'] = (df_suspensos['Valor Unitario'] / dias_no_mes) * df_suspensos['Dias a Faturar']
         
         # 4. Terminais com faturamento CHEIO (o que sobrou)
         df_cheio = df_nao_ativados_no_mes.drop(df_suspensos.index).copy()
         if not df_cheio.empty:
-            # O cálculo correto é baseado nos dias ativos menos os dias suspensos
             df_cheio['Dias a Faturar'] = (df_cheio['Dias Ativos Mês'] - df_cheio['Suspenso Dias Mes']).clip(lower=0)
             df_cheio['Valor a Faturar'] = (df_cheio['Valor Unitario'] / dias_no_mes) * df_cheio['Dias a Faturar']
 
@@ -352,7 +367,6 @@ if uploaded_file:
             total_gprs = len(df_total[df_total['Tipo'] == 'GPRS'])
             total_satelital = len(df_total[df_total['Tipo'] == 'Satelital'])
             
-            # Ajusta a contagem de terminais proporcionais para incluir os suspensos faturados
             num_terminais_proporcional = len(df_ativados) + len(df_desativados)
 
             col1, col2, col3, col4, col5 = st.columns(5)
