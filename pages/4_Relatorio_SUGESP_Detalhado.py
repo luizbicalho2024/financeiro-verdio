@@ -85,31 +85,29 @@ def buscar_transacoes_em_partes(token, data_inicio, data_fim, chunk_days=7):
     progress_bar.success("Coleta de transações concluída!")
     return todas_transacoes
 
-def processar_relatorio_com_base_nas_transacoes(faturas, transacoes, empenhos, contratos, produtos, dados_bancarios, info_empresa, data_inicio, taxa_adicional, vencimento_manual):
+def processar_relatorio_com_base_nas_transacoes(faturas, transacoes, empenhos, contratos, produtos, dados_bancarios, info_empresa, data_inicio, taxa_adicional, vencimento_manual, status_selecionados):
     """
-    LÓGICA AJUSTADA: Gera relatórios com o mês em português.
+    LÓGICA APRIMORADA: Gera relatórios filtrando pelo status da transação.
     """
     mapa_produtos = {p['id']: p['nome'] for p in produtos}
     mapa_contratos = {c['id']: c for c in contratos}
     mapa_empenhos = {e['id']: e['numero_empenho'] for e in empenhos}
     relatorios_finais = []
     
-    # Dicionário para tradução dos meses
     meses_pt = {
-        "January": "Janeiro", "February": "Fevereiro", "March": "Março",
-        "April": "Abril", "May": "Maio", "June": "Junho",
-        "July": "Julho", "August": "Agosto", "September": "Setembro",
-        "October": "Outubro", "November": "Novembro", "December": "Dezembro"
+        "January": "Janeiro", "February": "Fevereiro", "March": "Março", "April": "Abril", "May": "Maio", "June": "Junho",
+        "July": "Julho", "August": "Agosto", "September": "Setembro", "October": "Outubro", "November": "Novembro", "December": "Dezembro"
     }
 
     CNPJ_PRINCIPAL = "03693136000112"
 
+    # Filtra transações pelo status selecionado pelo usuário
     transacoes_sugesp = [
         t for t in transacoes 
-        if t.get('informacao', {}).get('cliente', {}).get('cnpj') == CNPJ_PRINCIPAL
+        if t.get('informacao', {}).get('cliente', {}).get('cnpj') == CNPJ_PRINCIPAL and t.get('status') in status_selecionados
     ]
     if not transacoes_sugesp:
-        st.warning("Nenhuma transação encontrada para o cliente SUGESP no período selecionado.")
+        st.warning(f"Nenhuma transação com os status selecionados ({', '.join(status_selecionados)}) foi encontrada para o cliente SUGESP no período.")
         return []
 
     secretarias = defaultdict(list)
@@ -134,10 +132,9 @@ def processar_relatorio_com_base_nas_transacoes(faturas, transacoes, empenhos, c
             return []
         vencimento = datetime.strptime(fatura_geral['liquidacao_prevista'], '%Y-%m-%d %H:%M:%S').strftime('%d/%m/%Y')
         
-    # Formata o período com o mês em português
     mes_en = data_inicio.strftime('%B')
     ano = data_inicio.strftime('%Y')
-    mes_pt_nome = meses_pt.get(mes_en, mes_en) # Usa o nome em inglês como fallback
+    mes_pt_nome = meses_pt.get(mes_en, mes_en)
     periodo = f"{mes_pt_nome.capitalize()}/{ano}"
 
     for nome_secretaria, transacoes_da_secretaria in secretarias.items():
@@ -210,7 +207,7 @@ st.markdown("---")
 st.subheader("1. Configurações da Consulta")
 token = st.text_input("🔑 Token de Autenticação da API", type="password", help="Insira seu token Bearer para acessar os dados.")
 
-col1, col2 = st.columns(2)
+col1, col2, col3 = st.columns(3)
 hoje = datetime.now()
 primeiro_dia_mes_atual = hoje.replace(day=1)
 ultimo_dia_mes_anterior = primeiro_dia_mes_atual - timedelta(days=1)
@@ -220,6 +217,15 @@ with col1:
     data_inicio = st.date_input("🗓️ Data de Início (Período)", primeiro_dia_mes_anterior)
 with col2:
     data_fim = st.date_input("🗓️ Data de Fim (Período)", ultimo_dia_mes_anterior)
+with col3:
+    # Novo seletor de status
+    status_disponiveis = ["confirmada", "liquidada", "pendente", "cancelada"]
+    status_selecionados = st.multiselect(
+        "Status das Transações",
+        options=status_disponiveis,
+        default=["confirmada"],
+        help="Selecione os status das transações a serem incluídos no relatório."
+    )
 
 st.markdown("---")
 st.subheader("2. Informações Manuais e Ajustes")
@@ -241,6 +247,8 @@ with col_b:
 if st.button("🚀 Gerar Relatórios", type="primary"):
     if not token:
         st.error("O token de autenticação é obrigatório.")
+    elif not status_selecionados:
+        st.error("Por favor, selecione pelo menos um status de transação para continuar.")
     else:
         with st.spinner("Buscando todos os dados da API... Isso pode levar alguns minutos."):
             faturas = buscar_dados_api(token, "fatura-recebimentos?expand=cliente,configuracao.faturamentoTipo,grupo")
@@ -258,14 +266,14 @@ if st.button("🚀 Gerar Relatórios", type="primary"):
 
                 relatorios = processar_relatorio_com_base_nas_transacoes(
                     faturas, transacoes, empenhos, contratos, produtos,
-                    dados_bancarios, info_empresa, data_inicio, taxa_adicional, vencimento_manual
+                    dados_bancarios, info_empresa, data_inicio, taxa_adicional, vencimento_manual, status_selecionados
                 )
             
             st.markdown("---")
             st.subheader("3. Relatórios Gerados")
 
             if not relatorios:
-                st.warning("Nenhum relatório pôde ser gerado. Verifique se existem transações para o cliente SUGESP no período selecionado.")
+                st.warning("Nenhum relatório pôde ser gerado. Verifique se existem transações para o cliente e os filtros selecionados.")
             else:
                 st.success(f"{len(relatorios)} relatórios gerados com sucesso!")
                 texto_completo_download = ""
