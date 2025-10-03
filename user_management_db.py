@@ -78,7 +78,7 @@ def delete_billing_history(history_id):
         st.error(f"Erro ao excluir o registro de histórico: {e}")
         return False
 
-# --- NOVAS FUNÇÕES DE ESTOQUE E PREÇOS ---
+# --- FUNÇÕES DE ESTOQUE E PREÇOS ---
 
 @st.cache_data(ttl=600)
 def get_tracker_inventory():
@@ -93,7 +93,6 @@ def get_tracker_inventory():
 def update_tracker_inventory(df):
     """
     Atualiza/Cria registros de rastreadores no Firestore em lote.
-    O ID do documento é o número de série do equipamento.
     """
     try:
         batch = db.batch()
@@ -107,9 +106,9 @@ def update_tracker_inventory(df):
             data = {
                 'Nº Equipamento': serial_number,
                 'Modelo': row['Modelo'],
-                'Tipo': str(row['Tipo']).upper().strip() # Garante que o tipo seja maiúsculo
+                'Tipo': str(row['Tipo']).upper().strip()
             }
-            batch.set(tracker_ref, data, merge=True) # merge=True para não sobrescrever outros campos
+            batch.set(tracker_ref, data, merge=True)
             count += 1
         batch.commit()
         return count
@@ -117,9 +116,56 @@ def update_tracker_inventory(df):
         st.error(f"Erro ao salvar o inventário no banco de dados: {e}")
         return None
 
+@st.cache_data(ttl=600)
+def get_unique_models_and_types():
+    """Busca todos os modelos únicos de rastreador e seus tipos associados."""
+    try:
+        trackers = get_tracker_inventory()
+        if not trackers:
+            return {}
+        
+        df = pd.DataFrame(trackers)
+        # Pega o primeiro tipo encontrado para cada modelo
+        model_types = df.groupby('Modelo')['Tipo'].first().to_dict()
+        return model_types
+    except Exception as e:
+        st.error(f"Erro ao buscar modelos únicos: {e}")
+        return {}
+
+def update_type_for_models(updates):
+    """
+    Atualiza o tipo para todos os rastreadores de um ou mais modelos.
+    'updates' é um dicionário: {'Modelo': 'NovoTipo', ...}
+    """
+    success_count = 0
+    failed_models = []
+    
+    for model, new_type in updates.items():
+        try:
+            docs = db.collection('trackers').where('Modelo', '==', model).stream()
+            batch = db.batch()
+            
+            doc_found = False
+            for doc in docs:
+                doc_found = True
+                batch.update(doc.reference, {'Tipo': new_type})
+            
+            if doc_found:
+                batch.commit()
+                success_count += 1
+            else:
+                failed_models.append(model)
+
+        except Exception as e:
+            st.error(f"Erro ao atualizar o modelo '{model}': {e}")
+            failed_models.append(model)
+            
+    return success_count, failed_models
+
+
 @st.cache_data(ttl=3600)
 def get_pricing_config():
-    """Busca as configurações de preço do Firestore. Retorna valores padrão se não encontrar."""
+    """Busca as configurações de preço do Firestore."""
     try:
         config_doc = db.collection("settings").document("pricing").get()
         if config_doc.exists:
@@ -127,7 +173,6 @@ def get_pricing_config():
     except Exception as e:
         st.warning(f"Não foi possível buscar configurações de preço: {e}. Usando valores padrão.")
     
-    # Estrutura padrão
     return {
         "TIPO_EQUIPAMENTO": {
             "GPRS": 59.90,
@@ -141,7 +186,6 @@ def update_pricing_config(new_prices):
     """Atualiza as configurações de preço no Firestore."""
     try:
         db.collection("settings").document("pricing").set(new_prices, merge=True)
-        # Limpa o cache para que a próxima leitura pegue os valores atualizados
         st.cache_data.clear()
         return True
     except Exception as e:
