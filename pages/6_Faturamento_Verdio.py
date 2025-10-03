@@ -12,7 +12,7 @@ import user_management_db as umdb
 from fpdf import FPDF
 import numpy as np
 
-# --- CLASSE PARA GERAR PDF COM IDENTIDADE VISUAL ---
+# --- CLASSE PARA GERAR PDF COM IDENTIDADE VISUAL (VERSÃO FINAL) ---
 class PDF(FPDF):
     def header(self):
         try:
@@ -61,8 +61,7 @@ def processar_planilha_faturamento(file_bytes, tracker_inventory, prices):
             if match:
                 start_date_str = match.group(1).replace('-', '/')
                 report_date = pd.to_datetime(start_date_str, dayfirst=True)
-            else:
-                raise ValueError("Formato de data não encontrado")
+            else: raise ValueError("Formato de data não encontrado")
         except Exception:
             st.warning("Não foi possível ler o período da célula I9. O período será determinado pelas datas de ativação/desativação.")
             report_date = pd.NaT
@@ -87,8 +86,7 @@ def processar_planilha_faturamento(file_bytes, tracker_inventory, prices):
                 report_date = df[df['Data Desativação'].notna()]['Data Desativação'].iloc[0]
             elif not df[df['Data Ativação'].notna()].empty:
                 report_date = df[df['Data Ativação'].notna()]['Data Ativação'].iloc[0]
-            else:
-                report_date = datetime.now()
+            else: report_date = datetime.now()
 
         report_month, report_year = report_date.month, report_date.year
         dias_no_mes = pd.Timestamp(year=report_year, month=report_month, day=1).days_in_month
@@ -214,7 +212,6 @@ if uploaded_file:
             last_prices = {
                 "GPRS": last_billing.get("valor_unitario_gprs", prices["GPRS"]),
                 "SATELITE": last_billing.get("valor_unitario_satelital", prices["SATELITE"]),
-                # Adicione outros tipos se eles forem salvos no histórico
             }
             if any(prices.get(k, 0) != v for k, v in last_prices.items()):
                 st.info(f"💡 Encontramos os valores utilizados no último faturamento para **{nome_cliente}**.")
