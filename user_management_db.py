@@ -2,13 +2,14 @@
 import streamlit as st
 from firebase_config import db
 from datetime import datetime
+import pandas as pd
 
 def log_action(level, user, message, details=None):
     """Registra uma ação no log do sistema no Firestore."""
     try:
         log_entry = {
             "timestamp": datetime.now(),
-            "level": level,  # INFO, WARNING, ERROR
+            "level": level,
             "user": user,
             "message": message,
             "details": details or {}
@@ -33,17 +34,27 @@ def get_billing_history():
         history = []
         for doc in history_ref:
             doc_data = doc.to_dict()
-            doc_data["_id"] = doc.id  # Adiciona o ID do documento
+            doc_data["_id"] = doc.id
             history.append(doc_data)
         return history
     except Exception as e:
         st.error(f"Erro ao buscar histórico de faturamento: {e}")
         return []
 
+def get_last_billing_for_client(client_name):
+    """Busca o último registro de faturamento para um cliente específico."""
+    try:
+        history_ref = db.collection("billing_history").where("cliente", "==", client_name).order_by("data_geracao", direction="DESCENDING").limit(1).stream()
+        for doc in history_ref:
+            return doc.to_dict()
+        return None
+    except Exception as e:
+        st.error(f"Erro ao buscar o último faturamento do cliente: {e}")
+        return None
+
 def log_faturamento(faturamento_data):
     """Salva um registro de faturamento gerado no Firestore."""
     try:
-        # CORREÇÃO: Busca o e-mail do usuário a partir do objeto 'user_info' na sessão
         user_email = st.session_state.get("user_info", {}).get("email", "sistema")
         faturamento_data.update({
             "data_geracao": datetime.now(),
@@ -66,32 +77,73 @@ def delete_billing_history(history_id):
     except Exception as e:
         st.error(f"Erro ao excluir o registro de histórico: {e}")
         return False
-        
+
+# --- NOVAS FUNÇÕES DE ESTOQUE E PREÇOS ---
+
+@st.cache_data(ttl=600)
+def get_tracker_inventory():
+    """Busca todo o inventário de rastreadores do Firestore."""
+    try:
+        trackers_ref = db.collection("trackers").stream()
+        return [doc.to_dict() for doc in trackers_ref]
+    except Exception as e:
+        st.error(f"Erro ao buscar inventário de rastreadores: {e}")
+        return []
+
+def update_tracker_inventory(df):
+    """
+    Atualiza/Cria registros de rastreadores no Firestore em lote.
+    O ID do documento é o número de série do equipamento.
+    """
+    try:
+        batch = db.batch()
+        count = 0
+        for index, row in df.iterrows():
+            serial_number = str(row['Nº Equipamento']).strip()
+            if not serial_number:
+                continue
+            
+            tracker_ref = db.collection("trackers").document(serial_number)
+            data = {
+                'Nº Equipamento': serial_number,
+                'Modelo': row['Modelo'],
+                'Tipo': str(row['Tipo']).upper().strip() # Garante que o tipo seja maiúsculo
+            }
+            batch.set(tracker_ref, data, merge=True) # merge=True para não sobrescrever outros campos
+            count += 1
+        batch.commit()
+        return count
+    except Exception as e:
+        st.error(f"Erro ao salvar o inventário no banco de dados: {e}")
+        return None
+
+@st.cache_data(ttl=3600)
 def get_pricing_config():
     """Busca as configurações de preço do Firestore. Retorna valores padrão se não encontrar."""
     try:
-        # Tenta buscar a configuração do banco de dados
         config_doc = db.collection("settings").document("pricing").get()
         if config_doc.exists:
             return config_doc.to_dict()
     except Exception as e:
         st.warning(f"Não foi possível buscar configurações de preço: {e}. Usando valores padrão.")
-
-    # Retorna uma estrutura padrão caso a busca falhe
+    
+    # Estrutura padrão
     return {
-        "PRECOS_PF": {"GPRS / Gsm": 59.90},
-        "PLANOS_PJ": {
-            "36 Meses": {"Satélite": 159.90}
+        "TIPO_EQUIPAMENTO": {
+            "GPRS": 59.90,
+            "SATELITE": 159.90,
+            "CAMERA": 0.0,
+            "RADIO": 0.0,
         }
     }
 
-def get_last_billing_for_client(client_name):
-    """Busca o último registro de faturamento para um cliente específico."""
+def update_pricing_config(new_prices):
+    """Atualiza as configurações de preço no Firestore."""
     try:
-        history_ref = db.collection("billing_history").where("cliente", "==", client_name).order_by("data_geracao", direction="DESCENDING").limit(1).stream()
-        for doc in history_ref:
-            return doc.to_dict() # Retorna o registro mais recente
-        return None # Nenhum registro encontrado para este cliente
+        db.collection("settings").document("pricing").set(new_prices, merge=True)
+        # Limpa o cache para que a próxima leitura pegue os valores atualizados
+        st.cache_data.clear()
+        return True
     except Exception as e:
-        st.error(f"Erro ao buscar o último faturamento do cliente: {e}")
-        return None
+        st.error(f"Erro ao atualizar os preços: {e}")
+        return False
