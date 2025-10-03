@@ -13,6 +13,9 @@ import numpy as np
 
 # --- CLASSE PARA GERAR PDF COM IDENTIDADE VISUAL (VERSÃO FINAL) ---
 class PDF(FPDF):
+    """
+    Classe customizada para gerar PDFs com cabeçalho e rodapé padrão da Uzzipay.
+    """
     def header(self):
         try:
             page_width = self.w - self.l_margin - self.r_margin
@@ -50,6 +53,9 @@ if st.sidebar.button("Logout"):
 # --- 2. FUNÇÕES AUXILIARES ---
 @st.cache_data
 def processar_planilha_faturamento(file_bytes, tracker_inventory, pricing_config):
+    """
+    Lê a planilha, extrai informações, classifica, calcula e retorna os dataframes de faturamento.
+    """
     try:
         meses_pt = {"January": "Janeiro", "February": "Fevereiro", "March": "Março", "April": "Abril", "May": "Maio", "June": "Junho", "July": "Julho", "August": "Agosto", "September": "Setembro", "October": "Outubro", "November": "Novembro", "December": "Dezembro"}
         
@@ -59,7 +65,7 @@ def processar_planilha_faturamento(file_bytes, tracker_inventory, pricing_config
 
         required_cols = ['Cliente', 'Terminal', 'Data Ativação', 'Data Desativação', 'Dias Ativos Mês', 'Suspenso Dias Mes', 'Nº Equipamento', 'Condição']
         if not all(col in df.columns for col in required_cols):
-            return None, "Erro de Colunas: Verifique o cabeçalho na linha 12.", None
+            return None, "Erro de Colunas: Verifique o cabeçalho na linha 12.", None, None, None
 
         nome_cliente = str(df['Cliente'].dropna().iloc[0]).strip() if not df['Cliente'].dropna().empty else "Cliente não identificado"
 
