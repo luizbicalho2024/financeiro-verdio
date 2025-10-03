@@ -29,13 +29,12 @@ if st.sidebar.button("Logout"):
 
 # --- TÍTULO DA PÁGINA ---
 st.title("📦 Gestão de Estoque e Preços")
-st.markdown("Atualize o estoque de rastreadores e gerencie os preços de faturamento por tipo de equipamento.")
+st.markdown("Atualize o estoque de rastreadores e gerencie os preços e tipos de equipamentos.")
 
 # --- SEÇÃO DE PREÇOS ---
 with st.expander("Gerenciar Preços por Tipo de Equipamento", expanded=True):
     pricing_config = umdb.get_pricing_config()
     
-    # Garante que a estrutura de preços exista
     if "TIPO_EQUIPAMENTO" not in pricing_config:
         pricing_config["TIPO_EQUIPAMENTO"] = {}
 
@@ -54,44 +53,91 @@ with st.expander("Gerenciar Preços por Tipo de Equipamento", expanded=True):
         else:
             st.error("Ocorreu um erro ao salvar os preços.")
 
-
 st.markdown("---")
 
 # --- SEÇÃO DE UPLOAD DE ESTOQUE ---
-st.subheader("Atualizar Estoque de Rastreadores")
-uploaded_file = st.file_uploader("Selecione a planilha de estoque (.xlsx)", type=['xlsx'])
+with st.expander("Atualizar Estoque via Planilha", expanded=False):
+    st.subheader("Carregar Nova Planilha de Estoque")
+    uploaded_file = st.file_uploader("Selecione a planilha de estoque (.xlsx)", type=['xlsx'])
 
-if uploaded_file:
-    try:
-        df_stock = pd.read_excel(uploaded_file, header=11, dtype={'Nº Equipamento': str, 'Nº Série': str})
-        
-        # Prioriza 'Nº Equipamento', se não existir, usa 'Nº Série'
-        if 'Nº Equipamento' not in df_stock.columns and 'Nº Série' in df_stock.columns:
-            df_stock = df_stock.rename(columns={'Nº Série': 'Nº Equipamento'})
-
-        required_cols = ['Nº Equipamento', 'Modelo', 'Tipo Equipamento']
-        if not all(col in df_stock.columns for col in required_cols):
-            st.error(f"A planilha precisa conter as colunas: {', '.join(required_cols)}. Verifique o cabeçalho na linha 12.")
-        else:
-            df_to_upload = df_stock[required_cols].copy()
-            df_to_upload.dropna(subset=['Nº Equipamento'], inplace=True)
-            df_to_upload = df_to_upload.rename(columns={'Tipo Equipamento': 'Tipo'})
+    if uploaded_file:
+        try:
+            df_stock = pd.read_excel(uploaded_file, header=11, dtype={'Nº Equipamento': str, 'Nº Série': str})
             
-            st.write("Pré-visualização dos dados a serem importados:")
-            st.dataframe(df_to_upload.head())
+            if 'Nº Equipamento' not in df_stock.columns and 'Nº Série' in df_stock.columns:
+                df_stock = df_stock.rename(columns={'Nº Série': 'Nº Equipamento'})
 
-            if st.button("Processar e Salvar no Banco de Dados"):
-                with st.spinner("Atualizando estoque... Isso pode levar alguns minutos."):
-                    count = umdb.update_tracker_inventory(df_to_upload)
-                    if count is not None:
-                        st.success(f"{count} registros de rastreadores foram salvos/atualizados com sucesso!")
-                        # Limpa o cache para forçar a recarga do estoque na próxima vez
-                        st.cache_data.clear()
-                    else:
-                        st.error("Ocorreu um erro ao atualizar o estoque.")
+            required_cols = ['Nº Equipamento', 'Modelo', 'Tipo Equipamento']
+            if not all(col in df_stock.columns for col in required_cols):
+                st.error(f"A planilha precisa conter as colunas: {', '.join(required_cols)}. Verifique o cabeçalho na linha 12.")
+            else:
+                df_to_upload = df_stock[required_cols].copy()
+                df_to_upload.dropna(subset=['Nº Equipamento'], inplace=True)
+                df_to_upload = df_to_upload.rename(columns={'Tipo Equipamento': 'Tipo'})
+                
+                st.write("Pré-visualização dos dados a serem importados:")
+                st.dataframe(df_to_upload.head())
 
-    except Exception as e:
-        st.error(f"Ocorreu um erro ao processar o arquivo: {e}")
+                if st.button("Processar e Salvar no Banco de Dados"):
+                    with st.spinner("Atualizando estoque... Isso pode levar alguns minutos."):
+                        count = umdb.update_tracker_inventory(df_to_upload)
+                        if count is not None:
+                            st.success(f"{count} registros de rastreadores foram salvos/atualizados com sucesso!")
+                            st.cache_data.clear()
+                            st.rerun()
+                        else:
+                            st.error("Ocorreu um erro ao atualizar o estoque.")
+
+        except Exception as e:
+            st.error(f"Ocorreu um erro ao processar o arquivo: {e}")
+
+st.markdown("---")
+
+# --- NOVA SEÇÃO PARA EDITAR TIPO POR MODELO ---
+st.subheader("Editar Tipo por Modelo de Rastreador")
+model_types = umdb.get_unique_models_and_types()
+tipos_disponiveis = ["GPRS", "SATELITE", "CAMERA", "RADIO"]
+
+if not model_types:
+    st.info("Nenhum modelo de rastreador encontrado no estoque. Faça o upload de uma planilha primeiro.")
+else:
+    st.info("Ajuste o tipo de equipamento para cada modelo. A alteração será aplicada a todos os rastreadores do mesmo modelo.")
+    
+    updates_to_perform = {}
+    cols = st.columns(3)
+    col_index = 0
+
+    for model, current_type in sorted(model_types.items()):
+        with cols[col_index]:
+            try:
+                # Garante que o tipo atual esteja na lista, mesmo que seja inválido
+                if current_type not in tipos_disponiveis:
+                    tipos_disponiveis.append(current_type)
+                
+                default_index = tipos_disponiveis.index(current_type)
+            except ValueError:
+                default_index = 0 # Padrão para o primeiro item se o tipo atual não for encontrado
+
+            new_type = st.selectbox(f"Modelo: **{model}**", options=tipos_disponiveis, index=default_index, key=f"model_{model}")
+            
+            if new_type != current_type:
+                updates_to_perform[model] = new_type
+        
+        col_index = (col_index + 1) % 3
+
+    if st.button("Salvar Alterações de Tipo", type="primary"):
+        if not updates_to_perform:
+            st.warning("Nenhuma alteração de tipo foi feita.")
+        else:
+            with st.spinner("Aplicando alterações em massa..."):
+                success, failed = umdb.update_type_for_models(updates_to_perform)
+                if success:
+                    st.success(f"Tipos de {success} modelo(s) foram atualizados com sucesso!")
+                    st.cache_data.clear()
+                    st.rerun()
+                if failed:
+                    st.error(f"Falha ao atualizar os seguintes modelos: {', '.join(failed)}")
+
 
 st.markdown("---")
 
