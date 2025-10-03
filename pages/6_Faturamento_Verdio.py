@@ -141,6 +141,7 @@ def create_pdf_report(nome_cliente, periodo, totais, df_cheio, df_ativados, df_d
     pdf.set_font("Arial", "B", 11); pdf.cell(table_width / 2, 8, "Faturamento (Cheio)", 1, 0, "C"); pdf.cell(table_width / 2, 8, "Faturamento (Proporcional)", 1, 1, "C")
     pdf.set_font("Arial", "", 11); pdf.cell(table_width / 2, 8, f"R$ {totais['cheio']:,.2f}", 1, 0, "C"); pdf.cell(table_width / 2, 8, f"R$ {totais['proporcional']:,.2f}", 1, 1, "C")
     pdf.set_font("Arial", "B", 11); pdf.cell(0, 10, f"FATURAMENTO TOTAL: R$ {totais['geral']:,.2f}", 1, 1, "C"); pdf.ln(10)
+    
     def draw_table(title, df, col_widths, available_cols, header_map):
         if not df.empty:
             pdf.set_font("Arial", "B", 12); pdf.cell(0, 10, title, 0, 1, "L"); pdf.set_font("Arial", "B", 7)
@@ -162,14 +163,17 @@ def create_pdf_report(nome_cliente, periodo, totais, df_cheio, df_ativados, df_d
                     pdf.cell(col_widths.get(h, 20), 6, cell_text, 1, 0, 'C')
                 pdf.ln()
             pdf.ln(5)
+            
     header_map = {'Nº Equipamento': 'Nº\nEquipamento', 'Valor a Faturar': 'Valor a\nFaturar', 'Data Ativação': 'Data\nAtivação', 'Data Desativação': 'Data\nDesativação', 'Dias Ativos Mês': 'Dias\nAtivos', 'Suspenso Dias Mes': 'Dias\nSuspensos', 'Dias a Faturar': 'Dias a\nFaturar', 'Valor Unitario': 'Valor\nUnitário'}
     widths_cheio = {'Terminal': 45, 'Nº Equipamento': 45, 'Placa': 40, 'Modelo': 25, 'Tipo': 20, 'Valor a Faturar': 35}
-    draw_table("Detalhamento do Faturamento Cheio", df_cheio, list(widths_cheio.keys()), header_map)
+    # CORREÇÃO: Passando os argumentos corretos para a função draw_table
+    draw_table("Detalhamento do Faturamento Cheio", df_cheio, widths_cheio, list(widths_cheio.keys()), header_map)
     widths_proporcional = {'Terminal': 22, 'Nº Equipamento': 22, 'Placa': 22, 'Tipo': 15, 'Data Ativação': 18, 'Data Desativação': 18, 'Dias Ativos Mês': 15, 'Suspenso Dias Mes': 18, 'Dias a Faturar': 15, 'Valor Unitario': 20, 'Valor a Faturar': 20}
     cols_proporcionais = ['Terminal', 'Nº Equipamento', 'Modelo', 'Tipo', 'Data Ativação', 'Data Desativação', 'Dias Ativos Mês', 'Suspenso Dias Mes', 'Dias a Faturar', 'Valor Unitario', 'Valor a Faturar']
     draw_table("Detalhamento Proporcional (Ativações no Mês)", df_ativados, widths_proporcional, cols_proporcionais, header_map)
     draw_table("Detalhamento Proporcional (Desativações no Mês)", df_desativados, widths_proporcional, cols_proporcionais, header_map)
     draw_table("Detalhamento dos Terminais Suspensos (Faturamento Prop.)", df_suspensos, widths_proporcional, cols_proporcionais, header_map)
+    
     return bytes(pdf.output(dest='S').encode('latin-1'))
 
 # --- 3. INTERFACE DA PÁGINA ---
