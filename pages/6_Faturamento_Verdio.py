@@ -50,9 +50,6 @@ if st.sidebar.button("Logout"):
 # --- 2. FUNÇÕES AUXILIARES ---
 @st.cache_data
 def processar_planilha_faturamento(file_bytes, tracker_inventory, pricing_config):
-    """
-    Lê a planilha, extrai informações, classifica, calcula e retorna os dataframes de faturamento.
-    """
     try:
         meses_pt = {"January": "Janeiro", "February": "Fevereiro", "March": "Março", "April": "Abril", "May": "Maio", "June": "Junho", "July": "Julho", "August": "Agosto", "September": "Setembro", "October": "Outubro", "November": "Novembro", "December": "Dezembro"}
         
@@ -221,7 +218,8 @@ def create_pdf_report(nome_cliente, periodo, totais, df_cheio, df_ativados, df_d
     return bytes(pdf.output(dest='S').encode('latin-1'))
 
 # --- 3. INTERFACE DA PÁGINA ---
-st.image("imgs/logo.png", width=250, use_column_width='auto')
+# CORREÇÃO: Removido o parâmetro obsoleto 'use_column_width'
+st.image("imgs/logo.png", width=250)
 st.markdown("<h1 style='text-align: center; color: #006494;'>Verdio Assistente de Faturamento</h1>", unsafe_allow_html=True)
 st.markdown("---")
 
