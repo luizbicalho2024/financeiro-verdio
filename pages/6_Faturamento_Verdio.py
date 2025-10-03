@@ -12,7 +12,7 @@ import user_management_db as umdb
 from fpdf import FPDF
 import numpy as np
 
-# --- CLASSE PARA GERAR PDF COM IDENTIDADE VISUAL (VERSÃO FINAL) ---
+# --- CLASSE PARA GERAR PDF COM IDENTIDADE VISUAL ---
 class PDF(FPDF):
     def header(self):
         try:
@@ -54,16 +54,18 @@ def processar_planilha_faturamento(file_bytes, tracker_inventory, prices):
     try:
         meses_pt = {"January": "Janeiro", "February": "Fevereiro", "March": "Março", "April": "Abril", "May": "Maio", "June": "Junho", "July": "Julho", "August": "Agosto", "September": "Setembro", "October": "Outubro", "November": "Novembro", "December": "Dezembro"}
         
-        # --- LÓGICA ATUALIZADA PARA LER PERÍODO DA CÉLULA I9 ---
         try:
             periodo_df = pd.read_excel(io.BytesIO(file_bytes), header=None, sheet_name=0)
-            periodo_str = periodo_df.iloc[8, 8]  # Linha 9, Coluna I
-            # Extrai a primeira data da string "Período Apuração: 01/09/2025 a 30/09/2025"
-            start_date_str = re.search(r'(\d{2}/\d{2}/\d{4})', periodo_str).group(1)
-            report_date = pd.to_datetime(start_date_str, dayfirst=True)
+            periodo_str = periodo_df.iloc[8, 8]
+            match = re.search(r'(\d{2}[-/]\d{2}[-/]\d{4})', str(periodo_str))
+            if match:
+                start_date_str = match.group(1).replace('-', '/')
+                report_date = pd.to_datetime(start_date_str, dayfirst=True)
+            else:
+                raise ValueError("Formato de data não encontrado")
         except Exception:
-            st.warning("Não foi possível ler o período da célula I9. Usando data atual como referência.")
-            report_date = datetime.now()
+            st.warning("Não foi possível ler o período da célula I9. O período será determinado pelas datas de ativação/desativação.")
+            report_date = pd.NaT
 
         df = pd.read_excel(io.BytesIO(file_bytes), header=11, engine='openpyxl', dtype={'Equipamento': str})
         df = df.rename(columns={'Suspenso Dias Mês': 'Suspenso Dias Mes', 'Equipamento': 'Nº Equipamento'})
@@ -79,6 +81,14 @@ def processar_planilha_faturamento(file_bytes, tracker_inventory, prices):
             df[col] = pd.to_datetime(df[col], errors='coerce', dayfirst=True)
         for col in ['Dias Ativos Mês', 'Suspenso Dias Mes']:
             df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+        
+        if pd.isna(report_date):
+            if not df[df['Data Desativação'].notna()].empty:
+                report_date = df[df['Data Desativação'].notna()]['Data Desativação'].iloc[0]
+            elif not df[df['Data Ativação'].notna()].empty:
+                report_date = df[df['Data Ativação'].notna()]['Data Ativação'].iloc[0]
+            else:
+                report_date = datetime.now()
 
         report_month, report_year = report_date.month, report_date.year
         dias_no_mes = pd.Timestamp(year=report_year, month=report_month, day=1).days_in_month
@@ -86,9 +96,7 @@ def processar_planilha_faturamento(file_bytes, tracker_inventory, prices):
         
         df_inventory = pd.DataFrame(tracker_inventory)
         df_merged = pd.merge(df, df_inventory, on='Nº Equipamento', how='left')
-
         not_found_equip = df_merged[df_merged['Tipo'].isna()]['Nº Equipamento'].tolist()
-        
         df_merged['Valor Unitario'] = df_merged['Tipo'].map(prices).fillna(0)
 
         conditions = [
@@ -112,8 +120,59 @@ def processar_planilha_faturamento(file_bytes, tracker_inventory, prices):
     except Exception as e:
         return None, None, None, None, f"Ocorreu um erro inesperado: {e}"
 
+def to_excel(df_cheio, df_ativados, df_desativados, df_suspensos):
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        df_cheio.to_excel(writer, index=False, sheet_name='Faturamento Cheio')
+        df_ativados.to_excel(writer, index=False, sheet_name='Proporcional - Ativados')
+        df_desativados.to_excel(writer, index=False, sheet_name='Proporcional - Desativados')
+        df_suspensos.to_excel(writer, index=False, sheet_name='Suspensos (Faturamento Prop.)')
+    return output.getvalue()
 
-# (As funções to_excel e create_pdf_report permanecem inalteradas)
+def create_pdf_report(nome_cliente, periodo, totais, df_cheio, df_ativados, df_desativados, df_suspensos):
+    pdf = PDF(orientation='P')
+    pdf.set_top_margin(40); pdf.set_auto_page_break(auto=True, margin=40); pdf.add_page()
+    pdf.set_font("Arial", "B", 16); pdf.cell(0, 10, "Resumo do Faturamento", 0, 1, "C"); pdf.ln(5)
+    pdf.set_font("Arial", "", 12); pdf.cell(0, 8, f"Cliente: {nome_cliente}", 0, 1, "L"); pdf.cell(0, 8, f"Período: {periodo}", 0, 1, "L"); pdf.ln(5)
+    pdf.set_font("Arial", "B", 9); table_width = pdf.w - pdf.l_margin - pdf.r_margin; col_width = table_width / 5
+    pdf.cell(col_width, 8, "Nº Fat. Cheio", 1, 0, "C"); pdf.cell(col_width, 8, "Nº Fat. Proporcional", 1, 0, "C"); pdf.cell(col_width, 8, "Nº Suspensos", 1, 0, "C")
+    pdf.cell(col_width, 8, "Total GPRS", 1, 0, "C"); pdf.cell(col_width, 8, "Total Satelitais", 1, 1, "C")
+    pdf.set_font("Arial", "", 9)
+    pdf.cell(col_width, 8, str(totais['terminais_cheio']), 1, 0, "C"); pdf.cell(col_width, 8, str(totais['terminais_proporcional']), 1, 0, "C"); pdf.cell(col_width, 8, str(totais['terminais_suspensos']), 1, 0, "C")
+    pdf.cell(col_width, 8, str(totais['terminais_gprs']), 1, 0, "C"); pdf.cell(col_width, 8, str(totais['terminais_satelitais']), 1, 1, "C"); pdf.ln(5)
+    pdf.set_font("Arial", "B", 11); pdf.cell(table_width / 2, 8, "Faturamento (Cheio)", 1, 0, "C"); pdf.cell(table_width / 2, 8, "Faturamento (Proporcional)", 1, 1, "C")
+    pdf.set_font("Arial", "", 11); pdf.cell(table_width / 2, 8, f"R$ {totais['cheio']:,.2f}", 1, 0, "C"); pdf.cell(table_width / 2, 8, f"R$ {totais['proporcional']:,.2f}", 1, 1, "C")
+    pdf.set_font("Arial", "B", 11); pdf.cell(0, 10, f"FATURAMENTO TOTAL: R$ {totais['geral']:,.2f}", 1, 1, "C"); pdf.ln(10)
+    def draw_table(title, df, col_widths, available_cols, header_map):
+        if not df.empty:
+            pdf.set_font("Arial", "B", 12); pdf.cell(0, 10, title, 0, 1, "L"); pdf.set_font("Arial", "B", 7)
+            header = [h for h in available_cols if h in df.columns]
+            header_row_height = 8; y_start = pdf.get_y(); x_start = pdf.get_x()
+            for h in header: pdf.cell(col_widths.get(h, 20), header_row_height, '', border=1, ln=0, align='C')
+            pdf.set_xy(x_start, y_start); current_x = x_start
+            for h in header:
+                width = col_widths.get(h, 20); header_text = header_map.get(h, h)
+                pdf.set_x(current_x); pdf.multi_cell(width, 4, header_text, border=0, align='C'); current_x += width; pdf.set_y(y_start)
+            pdf.set_y(y_start + header_row_height)
+            pdf.set_font("Arial", "", 6)
+            for _, row in df.iterrows():
+                for h in header:
+                    cell_text = str(row[h])
+                    if isinstance(row[h], datetime) and pd.notna(row[h]): cell_text = row[h].strftime('%d/%m/%Y')
+                    elif isinstance(row[h], (float, int)): cell_text = f"R$ {row[h]:,.2f}" if 'Valor' in h else str(row[h])
+                    elif pd.isna(row[h]): cell_text = ""
+                    pdf.cell(col_widths.get(h, 20), 6, cell_text, 1, 0, 'C')
+                pdf.ln()
+            pdf.ln(5)
+    header_map = {'Nº Equipamento': 'Nº\nEquipamento', 'Valor a Faturar': 'Valor a\nFaturar', 'Data Ativação': 'Data\nAtivação', 'Data Desativação': 'Data\nDesativação', 'Dias Ativos Mês': 'Dias\nAtivos', 'Suspenso Dias Mes': 'Dias\nSuspensos', 'Dias a Faturar': 'Dias a\nFaturar', 'Valor Unitario': 'Valor\nUnitário'}
+    widths_cheio = {'Terminal': 45, 'Nº Equipamento': 45, 'Placa': 40, 'Modelo': 25, 'Tipo': 20, 'Valor a Faturar': 35}
+    draw_table("Detalhamento do Faturamento Cheio", df_cheio, list(widths_cheio.keys()), header_map)
+    widths_proporcional = {'Terminal': 22, 'Nº Equipamento': 22, 'Placa': 22, 'Tipo': 15, 'Data Ativação': 18, 'Data Desativação': 18, 'Dias Ativos Mês': 15, 'Suspenso Dias Mes': 18, 'Dias a Faturar': 15, 'Valor Unitario': 20, 'Valor a Faturar': 20}
+    cols_proporcionais = ['Terminal', 'Nº Equipamento', 'Modelo', 'Tipo', 'Data Ativação', 'Data Desativação', 'Dias Ativos Mês', 'Suspenso Dias Mes', 'Dias a Faturar', 'Valor Unitario', 'Valor a Faturar']
+    draw_table("Detalhamento Proporcional (Ativações no Mês)", df_ativados, widths_proporcional, cols_proporcionais, header_map)
+    draw_table("Detalhamento Proporcional (Desativações no Mês)", df_desativados, widths_proporcional, cols_proporcionais, header_map)
+    draw_table("Detalhamento dos Terminais Suspensos (Faturamento Prop.)", df_suspensos, widths_proporcional, cols_proporcionais, header_map)
+    return bytes(pdf.output(dest='S').encode('latin-1'))
 
 # --- 3. INTERFACE DA PÁGINA ---
 st.image("imgs/logo.png", width=250)
@@ -121,24 +180,15 @@ st.markdown("<h1 style='text-align: center; color: #006494;'>Verdio Assistente d
 st.markdown("---")
 
 # --- 4. INPUTS DE CONFIGURAÇÃO ---
-st.sidebar.header("Valores de Faturamento")
+st.sidebar.header("Valores para este Faturamento")
 pricing_config = umdb.get_pricing_config().get("TIPO_EQUIPAMENTO", {})
 
-# Lógica para aplicar valores do mês anterior, se solicitado
-if 'prices_to_apply' in st.session_state:
-    default_prices = st.session_state.pop('prices_to_apply')
-else:
-    default_prices = pricing_config
+default_prices = st.session_state.get('prices_to_apply', pricing_config)
+if 'prices_to_apply' in st.session_state: del st.session_state['prices_to_apply']
 
-# Inputs editáveis na sidebar
 prices = {}
-for equip_type in ["GPRS", "SATELITE", "CAMERA", "RADIO"]:
-    prices[equip_type] = st.sidebar.number_input(
-        f"Preço {equip_type}",
-        min_value=0.0,
-        value=float(default_prices.get(equip_type, 0.0)),
-        format="%.2f"
-    )
+for equip_type in sorted(pricing_config.keys()):
+    prices[equip_type] = st.sidebar.number_input(f"Preço {equip_type}", min_value=0.0, value=float(default_prices.get(equip_type, 0.0)), format="%.2f")
 
 # --- 5. UPLOAD DO FICHEIRO ---
 st.subheader("Carregamento do Relatório de Terminais")
@@ -159,7 +209,6 @@ if uploaded_file:
     if error:
         st.error(error)
     elif df_final is not None:
-        # --- LÓGICA PARA SUGERIR PREÇOS DO ÚLTIMO FATURAMENTO ---
         last_billing = umdb.get_last_billing_for_client(nome_cliente)
         if last_billing:
             last_prices = {
@@ -167,23 +216,18 @@ if uploaded_file:
                 "SATELITE": last_billing.get("valor_unitario_satelital", prices["SATELITE"]),
                 # Adicione outros tipos se eles forem salvos no histórico
             }
-            # Compara se os preços atuais são diferentes dos últimos encontrados
             if any(prices.get(k, 0) != v for k, v in last_prices.items()):
                 st.info(f"💡 Encontramos os valores utilizados no último faturamento para **{nome_cliente}**.")
                 cols = st.columns(len(last_prices) + 1)
-                i = 0
+                i=0
                 for p_type, p_val in last_prices.items():
-                    cols[i].metric(f"Último Preço {p_type}", f"R$ {p_val:.2f}")
-                    i += 1
-                
+                    cols[i].metric(f"Último Preço {p_type}", f"R$ {p_val:.2f}"); i+=1
                 if cols[i].button("Aplicar valores e recalcular"):
-                    st.session_state['prices_to_apply'] = last_prices
-                    st.rerun()
+                    st.session_state['prices_to_apply'] = last_prices; st.rerun()
 
         if not_found:
             with st.expander("⚠️ Equipamentos Não Encontrados no Estoque", expanded=True):
-                st.warning("Os seguintes equipamentos não foram encontrados no estoque e não serão faturados.")
-                st.json(not_found)
+                st.warning("Os seguintes equipamentos não foram encontrados no estoque e não serão faturados."); st.json(not_found)
 
         df_cheio = df_final[df_final['Categoria'] == 'Cheio'].copy()
         df_ativados = df_final[df_final['Categoria'] == 'Ativado no Mês'].copy()
@@ -194,8 +238,7 @@ if uploaded_file:
         total_proporcional = df_ativados['Valor a Faturar'].sum() + df_desativados['Valor a Faturar'].sum() + df_suspensos['Valor a Faturar'].sum()
         total_geral = total_cheio + total_proporcional
 
-        st.header("Resumo do Faturamento")
-        st.subheader(f"Cliente: {nome_cliente}"); st.caption(f"Período: {periodo_relatorio}")
+        st.header("Resumo do Faturamento"); st.subheader(f"Cliente: {nome_cliente}"); st.caption(f"Período: {periodo_relatorio}")
 
         num_prop = len(df_ativados) + len(df_desativados)
         c1, c2, c3, c4, c5 = st.columns(5)
@@ -208,12 +251,7 @@ if uploaded_file:
         st.markdown("---"); st.subheader("Ações Finais")
         
         excel_data = to_excel(df_cheio, df_ativados, df_desativados, df_suspensos)
-        log_data = {
-            "cliente": nome_cliente, "periodo_relatorio": periodo_relatorio, "valor_total": total_geral,
-            "terminais_cheio": len(df_cheio), "terminais_proporcional": num_prop, "terminais_suspensos": len(df_suspensos),
-            "terminais_gprs": len(df_final[df_final['Tipo'] == 'GPRS']), "terminais_satelitais": len(df_final[df_final['Tipo'] == 'SATELITE']),
-            "valor_unitario_gprs": prices.get("GPRS", 0), "valor_unitario_satelital": prices.get("SATELITE", 0)
-        }
+        log_data = {"cliente": nome_cliente, "periodo_relatorio": periodo_relatorio, "valor_total": total_geral, "terminais_cheio": len(df_cheio), "terminais_proporcional": num_prop, "terminais_suspensos": len(df_suspensos), "terminais_gprs": len(df_final[df_final['Tipo'] == 'GPRS']), "terminais_satelitais": len(df_final[df_final['Tipo'] == 'SATELITE']), "valor_unitario_gprs": prices.get("GPRS", 0), "valor_unitario_satelital": prices.get("SATELITE", 0)}
         pdf_data = create_pdf_report(nome_cliente, periodo_relatorio, {"cheio": total_cheio, "proporcional": total_proporcional, "geral": total_geral, "terminais_cheio": len(df_cheio), "terminais_proporcional": num_prop, "terminais_suspensos": len(df_suspensos), "terminais_gprs": len(df_final[df_final['Tipo'] == 'GPRS']), "terminais_satelitais": len(df_final[df_final['Tipo'] == 'SATELITE'])}, df_cheio, df_ativados, df_desativados, df_suspensos)
         
         c1, c2 = st.columns(2)
