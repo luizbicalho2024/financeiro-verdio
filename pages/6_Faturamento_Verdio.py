@@ -9,7 +9,6 @@ from datetime import datetime
 import io
 import user_management_db as umdb
 from fpdf import FPDF
-import numpy as np
 
 # --- CLASSE PARA GERAR PDF COM IDENTIDADE VISUAL (VERSÃO FINAL) ---
 class PDF(FPDF):
@@ -17,6 +16,9 @@ class PDF(FPDF):
     Classe customizada para gerar PDFs com cabeçalho e rodapé padrão da Uzzipay.
     """
     def header(self):
+        """
+        Adiciona o cabeçalho com o logo da Uzzipay Soluções em todas as páginas.
+        """
         try:
             page_width = self.w - self.l_margin - self.r_margin
             self.image("imgs/header1.png", x=self.l_margin, y=8, w=page_width)
@@ -26,6 +28,9 @@ class PDF(FPDF):
             self.ln(15)
 
     def footer(self):
+        """
+        Adiciona o rodapé com as informações da empresa em todas as páginas.
+        """
         try:
             self.set_y(-35)
             page_width = self.w - self.l_margin - self.r_margin
@@ -36,12 +41,18 @@ class PDF(FPDF):
             self.cell(0, 10, f"Página {self.page_no()}", 0, 0, "C")
 
 # --- 1. CONFIGURAÇÃO E AUTENTICAÇÃO ---
-st.set_page_config(layout="wide", page_title="Verdio Faturamento", page_icon="imgs/v-c.png")
+st.set_page_config(
+    layout="wide",
+    page_title="Verdio Faturamento",
+    page_icon="imgs/v-c.png"
+)
+
+# --- VERIFICAÇÃO DE LOGIN ---
 if "user_info" not in st.session_state:
     st.error("🔒 Acesso Negado! Por favor, faça login para visualizar esta página.")
     st.stop()
 
-# --- BARRA LATERAL ---
+# --- BARRA LATERAL PADRONIZADA ---
 st.sidebar.image("imgs/v-c.png", width=120)
 st.sidebar.title(f"Olá, {st.session_state.get('name', 'N/A')}! 👋")
 st.sidebar.markdown("---")
@@ -50,72 +61,116 @@ if st.sidebar.button("Logout"):
         del st.session_state[key]
     st.switch_page("1_Home.py")
 
+
 # --- 2. FUNÇÕES AUXILIARES ---
 @st.cache_data
-def processar_planilha_faturamento(file_bytes, tracker_inventory, pricing_config):
+def processar_planilha_faturamento(file_bytes, valor_gprs, valor_satelital):
     """
-    Lê a planilha, extrai informações, classifica, calcula e retorna os dataframes de faturamento.
+    Lê a planilha, extrai a data de referência do cabeçalho, classifica,
+    calcula e retorna os dataframes de faturamento.
     """
     try:
-        meses_pt = {"January": "Janeiro", "February": "Fevereiro", "March": "Março", "April": "Abril", "May": "Maio", "June": "Junho", "July": "Julho", "August": "Agosto", "September": "Setembro", "October": "Outubro", "November": "Novembro", "December": "Dezembro"}
-        
+        meses_pt = {
+            "January": "Janeiro", "February": "Fevereiro", "March": "Março",
+            "April": "Abril", "May": "Maio", "June": "Junho",
+            "July": "Julho", "August": "Agosto", "September": "Setembro",
+            "October": "Outubro", "November": "Novembro", "December": "Dezembro"
+        }
+
+        # --- CORREÇÃO: Extrai a data de referência diretamente do cabeçalho do Excel ---
+        report_date = None
+        try:
+            df_header = pd.read_excel(io.BytesIO(file_bytes), header=None, engine='openpyxl', nrows=11)
+            report_date_str = None
+            for _, row in df_header.iterrows():
+                for cell in row:
+                    if isinstance(cell, str) and 'Data Inicial:' in cell:
+                        report_date_str = cell.split(':')[1].strip()
+                        break
+                if report_date_str:
+                    break
+            if report_date_str:
+                report_date = pd.to_datetime(report_date_str, dayfirst=True, errors='coerce')
+        except Exception:
+            # Se a leitura do cabeçalho falhar, a lógica de fallback abaixo será usada
+            pass
+
+        # Agora, lê o dataframe principal, pulando o cabeçalho
         df = pd.read_excel(io.BytesIO(file_bytes), header=11, engine='openpyxl', dtype={'Equipamento': str})
         df = df.rename(columns={'Suspenso Dias Mês': 'Suspenso Dias Mes', 'Equipamento': 'Nº Equipamento'})
-        df.dropna(subset=['Terminal'], inplace=True)
 
         required_cols = ['Cliente', 'Terminal', 'Data Ativação', 'Data Desativação', 'Dias Ativos Mês', 'Suspenso Dias Mes', 'Nº Equipamento', 'Condição']
         if not all(col in df.columns for col in required_cols):
-            return None, "Erro de Colunas: Verifique o cabeçalho na linha 12.", None, None, None
+            return None, None, None, None, None, None, "Erro de Colunas: Verifique o cabeçalho na linha 12."
 
-        nome_cliente = str(df['Cliente'].dropna().iloc[0]).strip() if not df['Cliente'].dropna().empty else "Cliente não identificado"
-
-        for col in ['Data Ativação', 'Data Desativação']:
-            df[col] = pd.to_datetime(df[col], errors='coerce', dayfirst=True)
-        for col in ['Dias Ativos Mês', 'Suspenso Dias Mes']:
-            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
-
-        report_date = pd.NaT
-        if not df[df['Data Desativação'].notna()].empty:
-            report_date = df[df['Data Desativação'].notna()]['Data Desativação'].iloc[0]
-        elif not df[df['Data Ativação'].notna()].empty:
-            report_date = df[df['Data Ativação'].notna()]['Data Ativação'].iloc[0]
-        
+        # Lógica de fallback se a data não foi encontrada no cabeçalho
         if pd.isna(report_date):
-            report_date = datetime.now()
-
-        report_month, report_year = report_date.month, report_date.year
+            st.warning("Não foi possível ler a 'Data Inicial' do cabeçalho do arquivo. O período será inferido a partir dos dados dos terminais.")
+            if not df[df['Data Desativação'].notna()].empty:
+                report_date = df[df['Data Desativação'].notna()]['Data Desativação'].iloc[0]
+            elif not df[df['Data Ativação'].notna()].empty:
+                report_date = df[df['Data Ativação'].notna()]['Data Ativação'].iloc[0]
+            
+            if pd.isna(report_date):
+                report_date = datetime.now()
+        
+        # O resto da função continua a partir daqui, usando a 'report_date' que foi determinada
+        report_month = report_date.month
+        report_year = report_date.year
         dias_no_mes = pd.Timestamp(year=report_year, month=report_month, day=1).days_in_month
-        periodo_relatorio = f"{meses_pt.get(report_date.strftime('%B'), report_date.strftime('%B'))} de {report_year}"
         
-        df_inventory = pd.DataFrame(tracker_inventory)
-        df_merged = pd.merge(df, df_inventory, on='Nº Equipamento', how='left')
+        mes_ingles = report_date.strftime("%B")
+        mes_portugues = meses_pt.get(mes_ingles, mes_ingles)
+        periodo_relatorio = f"{mes_portugues} de {report_year}"
+        
+        nome_cliente = str(df['Cliente'].dropna().iloc[0]).strip() if not df.empty and 'Cliente' in df.columns else "Cliente não identificado"
+        df.dropna(subset=['Terminal'], inplace=True)
+        df['Terminal'] = df['Terminal'].astype(str).str.strip()
+        df['Data Ativação'] = pd.to_datetime(df['Data Ativação'], errors='coerce', dayfirst=True)
+        df['Data Desativação'] = pd.to_datetime(df['Data Desativação'], errors='coerce', dayfirst=True)
+        df['Dias Ativos Mês'] = pd.to_numeric(df['Dias Ativos Mês'], errors='coerce').fillna(0)
+        df['Suspenso Dias Mes'] = pd.to_numeric(df['Suspenso Dias Mes'], errors='coerce').fillna(0)
 
-        not_found_equip = df_merged[df_merged['Tipo'].isna()]['Nº Equipamento'].tolist()
-        
-        price_map = pricing_config.get("TIPO_EQUIPAMENTO", {})
-        df_merged['Valor Unitario'] = df_merged['Tipo'].map(price_map).fillna(0)
+        df['Tipo'] = df['Nº Equipamento'].apply(lambda x: 'Satelital' if len(str(x).strip()) == 8 else 'GPRS')
+        df['Valor Unitario'] = df['Tipo'].apply(lambda x: valor_satelital if x == 'Satelital' else valor_gprs)
 
-        conditions = [
-            (df_merged['Data Desativação'].notna()),
-            (df_merged['Data Ativação'].dt.month == report_month) & (df_merged['Data Ativação'].dt.year == report_year),
-            (df_merged['Condição'].str.strip() == 'Suspenso')
-        ]
-        choices = ['Desativado', 'Ativado no Mês', 'Suspenso']
-        df_merged['Categoria'] = np.select(conditions, choices, default='Cheio')
-        
-        dias_a_faturar = 0
-        dias_a_faturar = np.where(df_merged['Categoria'] == 'Desativado', df_merged['Data Desativação'].dt.day - df_merged['Suspenso Dias Mes'], dias_a_faturar)
-        dias_a_faturar = np.where(df_merged['Categoria'] == 'Ativado no Mês', (dias_no_mes - df_merged['Data Ativação'].dt.day + 1) - df_merged['Suspenso Dias Mes'], dias_a_faturar)
-        dias_a_faturar = np.where(df_merged['Categoria'].isin(['Suspenso', 'Cheio']), df_merged['Dias Ativos Mês'] - df_merged['Suspenso Dias Mes'], dias_a_faturar)
-        
-        df_merged['Dias a Faturar'] = np.clip(dias_a_faturar, 0, None)
-        df_merged['Valor a Faturar'] = (df_merged['Valor Unitario'] / dias_no_mes) * df_merged['Dias a Faturar']
-        
-        return nome_cliente, periodo_relatorio, df_merged, not_found_equip, None
+        # 1. Terminais DESATIVADOS no mês (cobrança proporcional)
+        df_desativados = df[df['Data Desativação'].notna()].copy()
+        if not df_desativados.empty:
+            df_desativados['Dias a Faturar'] = (df_desativados['Data Desativação'].dt.day - df_desativados['Suspenso Dias Mes']).clip(lower=0)
+            df_desativados['Valor a Faturar'] = (df_desativados['Valor Unitario'] / dias_no_mes) * df_desativados['Dias a Faturar']
 
+        # Isola os terminais que não foram desativados
+        df_restantes = df[df['Data Desativação'].isna()].copy()
+        
+        # 2. Terminais ATIVADOS no mês (cobrança proporcional)
+        ativados_mask = (df_restantes['Data Ativação'].dt.month == report_month) & \
+                        (df_restantes['Data Ativação'].dt.year == report_year) & \
+                        (df_restantes['Dias Ativos Mês'] < dias_no_mes)
+        df_ativados = df_restantes[ativados_mask].copy()
+        if not df_ativados.empty:
+            df_ativados['Dias a Faturar'] = ((dias_no_mes - df_ativados['Data Ativação'].dt.day + 1) - df_ativados['Suspenso Dias Mes']).clip(lower=0)
+            df_ativados['Valor a Faturar'] = (df_ativados['Valor Unitario'] / dias_no_mes) * df_ativados['Dias a Faturar']
+        
+        # Isola os terminais que não foram ativados no mês para faturamento proporcional
+        df_nao_ativados_no_mes = df_restantes.drop(df_ativados.index)
+
+        # 3. Terminais SUSPENSOS (cobrança proporcional pelos dias ativos)
+        suspensos_mask = df_nao_ativados_no_mes['Condição'].str.strip() == 'Suspenso'
+        df_suspensos = df_nao_ativados_no_mes[suspensos_mask].copy()
+        if not df_suspensos.empty:
+            df_suspensos['Dias a Faturar'] = (df_suspensos['Dias Ativos Mês'] - df_suspensos['Suspenso Dias Mes']).clip(lower=0)
+            df_suspensos['Valor a Faturar'] = (df_suspensos['Valor Unitario'] / dias_no_mes) * df_suspensos['Dias a Faturar']
+        
+        # 4. Terminais com faturamento CHEIO (o que sobrou)
+        df_cheio = df_nao_ativados_no_mes.drop(df_suspensos.index).copy()
+        if not df_cheio.empty:
+            df_cheio['Dias a Faturar'] = (df_cheio['Dias Ativos Mês'] - df_cheio['Suspenso Dias Mes']).clip(lower=0)
+            df_cheio['Valor a Faturar'] = (df_cheio['Valor Unitario'] / dias_no_mes) * df_cheio['Dias a Faturar']
+
+        return nome_cliente, periodo_relatorio, df_cheio, df_ativados, df_desativados, df_suspensos, None
     except Exception as e:
-        return None, None, None, None, f"Ocorreu um erro inesperado: {e}"
-
+        return None, None, None, None, None, None, f"Ocorreu um erro inesperado ao processar o arquivo: {e}"
 
 @st.cache_data
 def to_excel(df_cheio, df_ativados, df_desativados, df_suspensos):
@@ -202,37 +257,65 @@ def create_pdf_report(nome_cliente, periodo, totais, df_cheio, df_ativados, df_d
                     if isinstance(row[h], datetime) and pd.notna(row[h]):
                         cell_text = row[h].strftime('%d/%m/%Y')
                     elif isinstance(row[h], (float, int)):
-                        cell_text = f"R$ {row[h]:,.2f}" if 'Valor' in h else str(row[h])
+                        cell_text = f"R$ {row[h]:,.2f}" if 'Valor' in h else str(int(row[h]))
                     elif pd.isna(row[h]):
                         cell_text = ""
                     pdf.cell(col_widths.get(h, 20), 6, cell_text, 1, 0, 'C')
                 pdf.ln()
             pdf.ln(5)
 
-    header_map = {'Nº Equipamento': 'Nº\nEquipamento', 'Valor a Faturar': 'Valor a\nFaturar', 'Data Ativação': 'Data\nAtivação', 'Data Desativação': 'Data\nDesativação', 'Dias Ativos Mês': 'Dias\nAtivos', 'Suspenso Dias Mes': 'Dias\nSuspensos', 'Dias a Faturar': 'Dias a\nFaturar', 'Valor Unitario': 'Valor\nUnitário'}
-    widths_cheio = {'Terminal': 45, 'Nº Equipamento': 45, 'Placa': 40, 'Modelo': 25, 'Tipo': 20, 'Valor a Faturar': 35}
+    header_map = {
+        'Nº Equipamento': 'Nº\nEquipamento',
+        'Valor a Faturar': 'Valor a\nFaturar',
+        'Data Ativação': 'Data\nAtivação',
+        'Data Desativação': 'Data\nDesativação',
+        'Dias Ativos Mês': 'Dias\nAtivos',
+        'Suspenso Dias Mes': 'Dias\nSuspensos',
+        'Dias a Faturar': 'Dias a\nFaturar',
+        'Valor Unitario': 'Valor\nUnitário'
+    }
+
+    widths_cheio = {'Terminal': 45, 'Nº Equipamento': 45, 'Placa': 40, 'Tipo': 25, 'Valor a Faturar': 35}
     cols_cheio = list(widths_cheio.keys())
     draw_table("Detalhamento do Faturamento Cheio", df_cheio, widths_cheio, cols_cheio, header_map)
-    widths_proporcional = {'Terminal': 22, 'Nº Equipamento': 22, 'Placa': 22, 'Tipo': 15, 'Data Ativação': 18, 'Data Desativação': 18, 'Dias Ativos Mês': 15, 'Suspenso Dias Mes': 18, 'Dias a Faturar': 15, 'Valor Unitario': 20, 'Valor a Faturar': 20}
-    cols_ativados = ['Terminal', 'Nº Equipamento', 'Modelo', 'Tipo', 'Data Ativação', 'Dias Ativos Mês', 'Suspenso Dias Mes', 'Dias a Faturar', 'Valor Unitario', 'Valor a Faturar']
+    
+    widths_proporcional = {
+        'Terminal': 22, 'Nº Equipamento': 22, 'Placa': 22, 'Tipo': 15, 'Data Ativação': 18, 
+        'Data Desativação': 18, 'Dias Ativos Mês': 15, 'Suspenso Dias Mes': 18, 
+        'Dias a Faturar': 15, 'Valor Unitario': 20, 'Valor a Faturar': 20
+    }
+    cols_ativados = ['Terminal', 'Nº Equipamento', 'Placa', 'Tipo', 'Data Ativação', 'Dias Ativos Mês', 'Suspenso Dias Mes', 'Dias a Faturar', 'Valor Unitario', 'Valor a Faturar']
     draw_table("Detalhamento Proporcional (Ativações no Mês)", df_ativados, widths_proporcional, cols_ativados, header_map)
-    cols_desativados = ['Terminal', 'Nº Equipamento', 'Modelo', 'Tipo', 'Data Desativação', 'Dias Ativos Mês', 'Suspenso Dias Mes', 'Dias a Faturar', 'Valor Unitario', 'Valor a Faturar']
+    
+    cols_desativados = ['Terminal', 'Nº Equipamento', 'Placa', 'Tipo', 'Data Desativação', 'Dias Ativos Mês', 'Suspenso Dias Mes', 'Dias a Faturar', 'Valor Unitario', 'Valor a Faturar']
     draw_table("Detalhamento Proporcional (Desativações no Mês)", df_desativados, widths_proporcional, cols_desativados, header_map)
-    cols_suspensos = ['Terminal', 'Nº Equipamento', 'Modelo', 'Tipo', 'Data Ativação', 'Dias Ativos Mês', 'Suspenso Dias Mes', 'Dias a Faturar', 'Valor Unitario', 'Valor a Faturar']
+
+    cols_suspensos = ['Terminal', 'Nº Equipamento', 'Placa', 'Tipo', 'Data Ativação', 'Dias Ativos Mês', 'Suspenso Dias Mes', 'Dias a Faturar', 'Valor Unitario', 'Valor a Faturar']
     draw_table("Detalhamento dos Terminais Suspensos (Faturamento Prop.)", df_suspensos, widths_proporcional, cols_suspensos, header_map)
     
     return bytes(pdf.output(dest='S').encode('latin-1'))
 
 # --- 3. INTERFACE DA PÁGINA ---
-st.image("imgs/logo.png", width=250, use_column_width='auto')
+try:
+    st.image("imgs/logo.png", width=250)
+except: pass
+
 st.markdown("<h1 style='text-align: center; color: #006494;'>Verdio Assistente de Faturamento</h1>", unsafe_allow_html=True)
 st.markdown("---")
 
 # --- 4. INPUTS DE CONFIGURAÇÃO ---
-st.sidebar.header("Preços Atuais (Gerenciados em Estoque)")
+st.sidebar.header("Valores de Faturamento")
 pricing_config = umdb.get_pricing_config()
-for equip_type, price in pricing_config.get("TIPO_EQUIPAMENTO", {}).items():
-    st.sidebar.metric(label=f"Preço {equip_type}", value=f"R$ {price:,.2f}")
+
+if 'gprs_to_apply' in st.session_state:
+    default_gprs = st.session_state.pop('gprs_to_apply')
+    default_satelital = st.session_state.pop('satelital_to_apply')
+else:
+    default_gprs = float(pricing_config.get("PRECOS_PF", {}).get("GPRS / Gsm", 0.0))
+    default_satelital = float(pricing_config.get("PLANOS_PJ", {}).get("36 Meses", {}).get("Satélite", 0.0))
+
+valor_gprs = st.sidebar.number_input("Valor Unitário Mensal (GPRS)", min_value=0.0, value=default_gprs, step=1.0, format="%.2f")
+valor_satelital = st.sidebar.number_input("Valor Unitário Mensal (Satelital)", min_value=0.0, value=default_satelital, step=1.0, format="%.2f")
 
 # --- 5. UPLOAD DO FICHEIRO ---
 st.subheader("Carregamento do Relatório de Terminais")
@@ -242,62 +325,124 @@ st.markdown("---")
 
 # --- 6. ANÁLISE E EXIBIÇÃO ---
 if uploaded_file:
-    tracker_inventory = umdb.get_tracker_inventory()
-    if not tracker_inventory:
-        st.warning("⚠️ Nenhum dado de estoque de rastreadores encontrado. Por favor, atualize o estoque na página 'Gestão de Estoque e Preços' antes de continuar.")
-        st.stop()
-    
-    file_bytes = uploaded_file.getvalue()
-    nome_cliente, periodo_relatorio, df_final, not_found, error = processar_planilha_faturamento(file_bytes, tracker_inventory, pricing_config)
+    if valor_gprs == 0.0 or valor_satelital == 0.0:
+        st.warning("Por favor, insira os valores unitários de GPRS e Satelital na barra lateral para continuar.")
+    else:
+        file_bytes = uploaded_file.getvalue()
+        nome_cliente, periodo_relatorio, df_cheio, df_ativados, df_desativados, df_suspensos, error_message = processar_planilha_faturamento(file_bytes, valor_gprs, valor_satelital)
 
-    if error:
-        st.error(error)
-    elif df_final is not None:
-        if not_found:
-            with st.expander("⚠️ Equipamentos Não Encontrados no Estoque", expanded=True):
-                st.warning("Os seguintes equipamentos não foram encontrados no estoque e não serão faturados. Por favor, atualize o estoque na página 'Gestão de Estoque e Preços'.")
-                st.json(not_found)
+        if error_message:
+            st.error(error_message)
+        elif df_cheio is not None:
+            last_billing = umdb.get_last_billing_for_client(nome_cliente)
+            if last_billing:
+                last_gprs = last_billing.get("valor_unitario_gprs", valor_gprs)
+                last_satelital = last_billing.get("valor_unitario_satelital", valor_satelital)
 
-        df_cheio = df_final[df_final['Categoria'] == 'Cheio'].copy()
-        df_ativados = df_final[df_final['Categoria'] == 'Ativado no Mês'].copy()
-        df_desativados = df_final[df_final['Categoria'] == 'Desativado'].copy()
-        df_suspensos = df_final[df_final['Categoria'] == 'Suspenso'].copy()
-        
-        total_cheio = df_cheio['Valor a Faturar'].sum()
-        total_proporcional = df_ativados['Valor a Faturar'].sum() + df_desativados['Valor a Faturar'].sum() + df_suspensos['Valor a Faturar'].sum()
-        total_geral = total_cheio + total_proporcional
+                if last_gprs != valor_gprs or last_satelital != valor_satelital:
+                    st.info(f"💡 Encontramos os valores utilizados no último faturamento para **{nome_cliente}**.")
+                    col1, col2, col3 = st.columns([2,2,3])
+                    col1.metric("Último Valor GPRS", f"R$ {last_gprs:.2f}")
+                    col2.metric("Último Valor Satelital", f"R$ {last_satelital:.2f}")
+                    with col3:
+                        st.write("") 
+                        if st.button("Aplicar valores e recalcular"):
+                            st.session_state['gprs_to_apply'] = last_gprs
+                            st.session_state['satelital_to_apply'] = last_satelital
+                            st.rerun()
 
-        st.header("Resumo do Faturamento")
-        st.subheader(f"Cliente: {nome_cliente}"); st.caption(f"Período: {periodo_relatorio}")
+            total_faturamento_cheio = df_cheio['Valor a Faturar'].sum() if not df_cheio.empty else 0
+            total_faturamento_ativados = df_ativados['Valor a Faturar'].sum() if not df_ativados.empty else 0
+            total_faturamento_desativados = df_desativados['Valor a Faturar'].sum() if not df_desativados.empty else 0
+            total_faturamento_suspensos = df_suspensos['Valor a Faturar'].sum() if not df_suspensos.empty else 0
+            
+            faturamento_proporcional_total = total_faturamento_ativados + total_faturamento_desativados + total_faturamento_suspensos
+            faturamento_total_geral = total_faturamento_cheio + faturamento_proporcional_total
 
-        num_prop = len(df_ativados) + len(df_desativados)
-        c1, c2, c3, c4, c5 = st.columns(5)
-        c1.metric("Nº Fat. Cheio", len(df_cheio)); c2.metric("Nº Fat. Proporcional", num_prop); c3.metric("Nº Suspensos", len(df_suspensos))
-        c4.metric("Total GPRS", len(df_final[df_final['Tipo'] == 'GPRS'])); c5.metric("Total Satelitais", len(df_final[df_final['Tipo'] == 'SATELITE']))
-        
-        c1, c2, c3 = st.columns(3)
-        c1.success(f"**Faturamento (Cheio):** R$ {total_cheio:,.2f}"); c2.warning(f"**Faturamento (Proporcional):** R$ {total_proporcional:,.2f}"); c3.info(f"**FATURAMENTO TOTAL:** R$ {total_geral:,.2f}")
-        
-        st.markdown("---"); st.subheader("Ações Finais")
-        
-        excel_data = to_excel(df_cheio, df_ativados, df_desativados, df_suspensos)
-        log_data = {"cliente": nome_cliente, "periodo_relatorio": periodo_relatorio, "valor_total": total_geral, "terminais_cheio": len(df_cheio), "terminais_proporcional": num_prop, "terminais_suspensos": len(df_suspensos), "terminais_gprs": len(df_final[df_final['Tipo'] == 'GPRS']), "terminais_satelitais": len(df_final[df_final['Tipo'] == 'SATELITE']), "valor_unitario_gprs": pricing_config.get("TIPO_EQUIPAMENTO", {}).get("GPRS", 0), "valor_unitario_satelital": pricing_config.get("TIPO_EQUIPAMENTO", {}).get("SATELITE", 0)}
-        pdf_data = create_pdf_report(nome_cliente, periodo_relatorio, {"cheio": total_cheio, "proporcional": total_proporcional, "geral": total_geral, "terminais_cheio": len(df_cheio), "terminais_proporcional": num_prop, "terminais_suspensos": len(df_suspensos), "terminais_gprs": len(df_final[df_final['Tipo'] == 'GPRS']), "terminais_satelitais": len(df_final[df_final['Tipo'] == 'SATELITE'])}, df_cheio, df_ativados, df_desativados, df_suspensos)
-        
-        c1, c2 = st.columns(2)
-        c1.download_button("📥 Exportar Excel e Salvar Histórico", excel_data, f"Faturamento_{nome_cliente.replace(' ', '_')}_{datetime.now().strftime('%Y-%m')}.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", on_click=umdb.log_faturamento, args=(log_data,))
-        c2.download_button("📄 Exportar Resumo em PDF", pdf_data, f"Resumo_Faturamento_{nome_cliente.replace(' ', '_')}_{datetime.now().strftime('%Y-%m')}.pdf", "application/pdf", on_click=umdb.log_faturamento, args=(log_data,))
+            st.header("Resumo do Faturamento")
+            st.subheader(f"Cliente: {nome_cliente}")
+            st.caption(f"Período: {periodo_relatorio}")
 
-        st.markdown("---")
-        cols_to_show = ['Terminal', 'Nº Equipamento', 'Modelo', 'Tipo', 'Data Ativação', 'Dias Ativos Mês', 'Suspenso Dias Mes', 'Dias a Faturar', 'Valor Unitario', 'Valor a Faturar']
-        
-        with st.expander("Detalhamento do Faturamento Cheio"):
-            st.dataframe(df_cheio[['Terminal', 'Nº Equipamento', 'Modelo', 'Tipo', 'Dias a Faturar', 'Valor a Faturar']], use_container_width=True, hide_index=True)
-        with st.expander("Detalhamento Proporcional (Ativações no Mês)"):
-            st.dataframe(df_ativados[cols_to_show], use_container_width=True, hide_index=True)
-        with st.expander("Detalhamento Proporcional (Desativações no Mês)"):
-            st.dataframe(df_desativados[cols_to_show], use_container_width=True, hide_index=True)
-        with st.expander("Detalhamento dos Terminais Suspensos (Faturamento Proporcional)"):
-            st.dataframe(df_suspensos[cols_to_show], use_container_width=True, hide_index=True)
+            df_total = pd.concat([df_cheio, df_ativados, df_desativados, df_suspensos])
+            total_gprs = len(df_total[df_total['Tipo'] == 'GPRS'])
+            total_satelital = len(df_total[df_total['Tipo'] == 'Satelital'])
+            
+            num_terminais_proporcional = len(df_ativados) + len(df_desativados)
+
+            col1, col2, col3, col4, col5 = st.columns(5)
+            col1.metric("Nº Fat. Cheio", value=len(df_cheio))
+            col2.metric("Nº Fat. Proporcional", value=num_terminais_proporcional)
+            col3.metric("Nº Suspensos", value=len(df_suspensos))
+            col4.metric("Total GPRS", value=total_gprs)
+            col5.metric("Total Satelitais", value=total_satelital)
+
+            col_a, col_b, col_c = st.columns(3)
+            col_a.success(f"**Faturamento (Cheio):** R$ {total_faturamento_cheio:,.2f}")
+            col_b.warning(f"**Faturamento (Proporcional):** R$ {faturamento_proporcional_total:,.2f}")
+            col_c.info(f"**FATURAMENTO TOTAL:** R$ {faturamento_total_geral:,.2f}")
+
+            st.markdown("---")
+
+            st.subheader("Ações Finais")
+            excel_data = to_excel(df_cheio, df_ativados, df_desativados, df_suspensos)
+            totais_pdf = {
+                "cheio": total_faturamento_cheio, "proporcional": faturamento_proporcional_total, "geral": faturamento_total_geral,
+                "terminais_cheio": len(df_cheio), "terminais_proporcional": num_terminais_proporcional,
+                "terminais_suspensos": len(df_suspensos), "terminais_gprs": total_gprs, "terminais_satelitais": total_satelital
+            }
+            pdf_data = create_pdf_report(nome_cliente, periodo_relatorio, totais_pdf, df_cheio, df_ativados, df_desativados, df_suspensos)
+            faturamento_data_log = {
+                "cliente": nome_cliente, "periodo_relatorio": periodo_relatorio,
+                "valor_total": faturamento_total_geral, "terminais_cheio": len(df_cheio),
+                "terminais_proporcional": num_terminais_proporcional,
+                "terminais_suspensos": len(df_suspensos),
+                "terminais_gprs": total_gprs, "terminais_satelitais": total_satelital,
+                "valor_unitario_gprs": valor_gprs, "valor_unitario_satelital": valor_satelital
+            }
+
+            col_btn1, col_btn2 = st.columns(2)
+            with col_btn1:
+                st.download_button(
+                    label="📥 Exportar Excel e Salvar Histórico",
+                    data=excel_data,
+                    file_name=f"Faturamento_{nome_cliente.replace(' ', '_')}_{datetime.now().strftime('%Y-%m')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    on_click=umdb.log_faturamento, args=(faturamento_data_log,)
+                )
+            with col_btn2:
+                st.download_button(
+                    label="📄 Exportar Resumo em PDF",
+                    data=pdf_data,
+                    file_name=f"Resumo_Faturamento_{nome_cliente.replace(' ', '_')}_{datetime.now().strftime('%Y-%m')}.pdf",
+                    mime="application/pdf",
+                    on_click=umdb.log_faturamento, args=(faturamento_data_log,)
+                )
+
+            st.markdown("---")
+            
+            with st.expander("Detalhamento dos Terminais Suspensos (Faturamento Proporcional)"):
+                if not df_suspensos.empty:
+                    st.dataframe(df_suspensos[['Terminal', 'Nº Equipamento', 'Placa', 'Tipo', 'Data Ativação', 'Dias Ativos Mês', 'Suspenso Dias Mes', 'Dias a Faturar', 'Valor Unitario', 'Valor a Faturar']], use_container_width=True, hide_index=True)
+                else:
+                    st.info("Nenhum terminal suspenso neste período.")
+
+            with st.expander("Detalhamento do Faturamento Proporcional (Ativações no Mês)"):
+                if not df_ativados.empty:
+                    st.dataframe(df_ativados[['Terminal', 'Nº Equipamento', 'Placa', 'Tipo', 'Data Ativação', 'Dias Ativos Mês', 'Suspenso Dias Mes', 'Dias a Faturar', 'Valor Unitario', 'Valor a Faturar']], use_container_width=True, hide_index=True)
+                else:
+                    st.info("Nenhum terminal ativado com faturamento proporcional neste período.")
+
+            with st.expander("Detalhamento do Faturamento Proporcional (Desativações no Mês)"):
+                if not df_desativados.empty:
+                    st.dataframe(df_desativados[['Terminal', 'Nº Equipamento', 'Placa', 'Tipo', 'Data Desativação', 'Dias Ativos Mês', 'Suspenso Dias Mes', 'Dias a Faturar', 'Valor Unitario', 'Valor a Faturar']], use_container_width=True, hide_index=True)
+                else:
+                    st.info("Nenhum terminal desativado neste período.")
+
+            with st.expander("Detalhamento do Faturamento Cheio"):
+                if not df_cheio.empty:
+                    st.dataframe(df_cheio[['Terminal', 'Nº Equipamento', 'Placa', 'Tipo', 'Dias a Faturar', 'Valor a Faturar']], use_container_width=True, hide_index=True)
+                else:
+                    st.info("Nenhum terminal com faturamento cheio neste período.")
+
 else:
     st.info("Aguardando o carregamento do relatório para iniciar a análise.")
