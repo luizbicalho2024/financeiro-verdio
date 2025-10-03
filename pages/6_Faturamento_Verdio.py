@@ -68,23 +68,27 @@ def processar_planilha_faturamento(file_bytes, tracker_inventory, pricing_config
         for col in ['Dias Ativos Mês', 'Suspenso Dias Mes']:
             df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
 
-        report_date = df[df['Data Desativação'].notna()]['Data Desativação'].iloc[0] if not df[df['Data Desativação'].notna()].empty else \
-                      df[df['Data Ativação'].notna()]['Data Ativação'].iloc[0] if not df[df['Data Ativação'].notna()].empty else datetime.now()
+        report_date = pd.NaT
+        if not df[df['Data Desativação'].notna()].empty:
+            report_date = df[df['Data Desativação'].notna()]['Data Desativação'].iloc[0]
+        elif not df[df['Data Ativação'].notna()].empty:
+            report_date = df[df['Data Ativação'].notna()]['Data Ativação'].iloc[0]
+        
+        if pd.isna(report_date):
+            report_date = datetime.now()
+
         report_month, report_year = report_date.month, report_date.year
         dias_no_mes = pd.Timestamp(year=report_year, month=report_month, day=1).days_in_month
         periodo_relatorio = f"{meses_pt.get(report_date.strftime('%B'), report_date.strftime('%B'))} de {report_year}"
         
-        # --- LÓGICA DE INTEGRAÇÃO COM ESTOQUE ---
         df_inventory = pd.DataFrame(tracker_inventory)
         df_merged = pd.merge(df, df_inventory, on='Nº Equipamento', how='left')
 
-        # Avisa sobre equipamentos não encontrados no estoque
         not_found_equip = df_merged[df_merged['Tipo'].isna()]['Nº Equipamento'].tolist()
         
         price_map = pricing_config.get("TIPO_EQUIPAMENTO", {})
         df_merged['Valor Unitario'] = df_merged['Tipo'].map(price_map).fillna(0)
 
-        # Classificação e Cálculo
         conditions = [
             (df_merged['Data Desativação'].notna()),
             (df_merged['Data Ativação'].dt.month == report_month) & (df_merged['Data Ativação'].dt.year == report_year),
@@ -106,16 +110,121 @@ def processar_planilha_faturamento(file_bytes, tracker_inventory, pricing_config
     except Exception as e:
         return None, None, None, None, f"Ocorreu um erro inesperado: {e}"
 
-# (As funções to_excel e create_pdf_report permanecem inalteradas)
+
+@st.cache_data
+def to_excel(df_cheio, df_ativados, df_desativados, df_suspensos):
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        df_cheio.to_excel(writer, index=False, sheet_name='Faturamento Cheio')
+        df_ativados.to_excel(writer, index=False, sheet_name='Proporcional - Ativados')
+        df_desativados.to_excel(writer, index=False, sheet_name='Proporcional - Desativados')
+        df_suspensos.to_excel(writer, index=False, sheet_name='Suspensos (Faturamento Prop.)')
+    return output.getvalue()
+
+def create_pdf_report(nome_cliente, periodo, totais, df_cheio, df_ativados, df_desativados, df_suspensos):
+    pdf = PDF(orientation='P')
+    pdf.set_top_margin(40)
+    pdf.set_auto_page_break(auto=True, margin=40)
+    pdf.add_page()
+    
+    pdf.set_font("Arial", "B", 16)
+    pdf.cell(0, 10, "Resumo do Faturamento", 0, 1, "C")
+    pdf.ln(5)
+
+    pdf.set_font("Arial", "", 12)
+    pdf.cell(0, 8, f"Cliente: {nome_cliente}", 0, 1, "L")
+    pdf.cell(0, 8, f"Período: {periodo}", 0, 1, "L")
+    pdf.ln(5)
+
+    pdf.set_font("Arial", "B", 9)
+    table_width = pdf.w - pdf.l_margin - pdf.r_margin
+    col_width = table_width / 5
+    pdf.cell(col_width, 8, "Nº Fat. Cheio", 1, 0, "C")
+    pdf.cell(col_width, 8, "Nº Fat. Proporcional", 1, 0, "C")
+    pdf.cell(col_width, 8, "Nº Suspensos", 1, 0, "C")
+    pdf.cell(col_width, 8, "Total GPRS", 1, 0, "C")
+    pdf.cell(col_width, 8, "Total Satelitais", 1, 1, "C")
+    pdf.set_font("Arial", "", 9)
+    pdf.cell(col_width, 8, str(totais['terminais_cheio']), 1, 0, "C")
+    pdf.cell(col_width, 8, str(totais['terminais_proporcional']), 1, 0, "C")
+    pdf.cell(col_width, 8, str(totais['terminais_suspensos']), 1, 0, "C")
+    pdf.cell(col_width, 8, str(totais['terminais_gprs']), 1, 0, "C")
+    pdf.cell(col_width, 8, str(totais['terminais_satelitais']), 1, 1, "C")
+    pdf.ln(5)
+
+    pdf.set_font("Arial", "B", 11)
+    pdf.cell(table_width / 2, 8, "Faturamento (Cheio)", 1, 0, "C")
+    pdf.cell(table_width / 2, 8, "Faturamento (Proporcional)", 1, 1, "C")
+    pdf.set_font("Arial", "", 11)
+    pdf.cell(table_width / 2, 8, f"R$ {totais['cheio']:,.2f}", 1, 0, "C")
+    pdf.cell(table_width / 2, 8, f"R$ {totais['proporcional']:,.2f}", 1, 1, "C")
+    pdf.set_font("Arial", "B", 11)
+    pdf.cell(0, 10, f"FATURAMENTO TOTAL: R$ {totais['geral']:,.2f}", 1, 1, "C")
+    pdf.ln(10)
+
+    def draw_table(title, df, col_widths, available_cols, header_map):
+        if not df.empty:
+            pdf.set_font("Arial", "B", 12)
+            pdf.cell(0, 10, title, 0, 1, "L")
+            pdf.set_font("Arial", "B", 7)
+            header = [h for h in available_cols if h in df.columns]
+            
+            header_row_height = 8
+            y_start = pdf.get_y()
+            x_start = pdf.get_x()
+
+            for h in header:
+                width = col_widths.get(h, 20)
+                pdf.cell(width, header_row_height, '', border=1, ln=0, align='C')
+            
+            pdf.set_xy(x_start, y_start) 
+            current_x = x_start
+            for h in header:
+                width = col_widths.get(h, 20)
+                header_text = header_map.get(h, h)
+                pdf.set_x(current_x)
+                pdf.multi_cell(width, 4, header_text, border=0, align='C')
+                current_x += width
+                pdf.set_y(y_start)
+
+            pdf.set_y(y_start + header_row_height)
+            
+            pdf.set_font("Arial", "", 6)
+            for _, row in df.iterrows():
+                for h in header:
+                    cell_text = str(row[h])
+                    if isinstance(row[h], datetime) and pd.notna(row[h]):
+                        cell_text = row[h].strftime('%d/%m/%Y')
+                    elif isinstance(row[h], (float, int)):
+                        cell_text = f"R$ {row[h]:,.2f}" if 'Valor' in h else str(row[h])
+                    elif pd.isna(row[h]):
+                        cell_text = ""
+                    pdf.cell(col_widths.get(h, 20), 6, cell_text, 1, 0, 'C')
+                pdf.ln()
+            pdf.ln(5)
+
+    header_map = {'Nº Equipamento': 'Nº\nEquipamento', 'Valor a Faturar': 'Valor a\nFaturar', 'Data Ativação': 'Data\nAtivação', 'Data Desativação': 'Data\nDesativação', 'Dias Ativos Mês': 'Dias\nAtivos', 'Suspenso Dias Mes': 'Dias\nSuspensos', 'Dias a Faturar': 'Dias a\nFaturar', 'Valor Unitario': 'Valor\nUnitário'}
+    widths_cheio = {'Terminal': 45, 'Nº Equipamento': 45, 'Placa': 40, 'Modelo': 25, 'Tipo': 20, 'Valor a Faturar': 35}
+    cols_cheio = list(widths_cheio.keys())
+    draw_table("Detalhamento do Faturamento Cheio", df_cheio, widths_cheio, cols_cheio, header_map)
+    widths_proporcional = {'Terminal': 22, 'Nº Equipamento': 22, 'Placa': 22, 'Tipo': 15, 'Data Ativação': 18, 'Data Desativação': 18, 'Dias Ativos Mês': 15, 'Suspenso Dias Mes': 18, 'Dias a Faturar': 15, 'Valor Unitario': 20, 'Valor a Faturar': 20}
+    cols_ativados = ['Terminal', 'Nº Equipamento', 'Modelo', 'Tipo', 'Data Ativação', 'Dias Ativos Mês', 'Suspenso Dias Mes', 'Dias a Faturar', 'Valor Unitario', 'Valor a Faturar']
+    draw_table("Detalhamento Proporcional (Ativações no Mês)", df_ativados, widths_proporcional, cols_ativados, header_map)
+    cols_desativados = ['Terminal', 'Nº Equipamento', 'Modelo', 'Tipo', 'Data Desativação', 'Dias Ativos Mês', 'Suspenso Dias Mes', 'Dias a Faturar', 'Valor Unitario', 'Valor a Faturar']
+    draw_table("Detalhamento Proporcional (Desativações no Mês)", df_desativados, widths_proporcional, cols_desativados, header_map)
+    cols_suspensos = ['Terminal', 'Nº Equipamento', 'Modelo', 'Tipo', 'Data Ativação', 'Dias Ativos Mês', 'Suspenso Dias Mes', 'Dias a Faturar', 'Valor Unitario', 'Valor a Faturar']
+    draw_table("Detalhamento dos Terminais Suspensos (Faturamento Prop.)", df_suspensos, widths_proporcional, cols_suspensos, header_map)
+    
+    return bytes(pdf.output(dest='S').encode('latin-1'))
 
 # --- 3. INTERFACE DA PÁGINA ---
 st.image("imgs/logo.png", width=250, use_column_width='auto')
 st.markdown("<h1 style='text-align: center; color: #006494;'>Verdio Assistente de Faturamento</h1>", unsafe_allow_html=True)
 st.markdown("---")
 
-# Carrega configurações de preço
-pricing_config = umdb.get_pricing_config()
+# --- 4. INPUTS DE CONFIGURAÇÃO ---
 st.sidebar.header("Preços Atuais (Gerenciados em Estoque)")
+pricing_config = umdb.get_pricing_config()
 for equip_type, price in pricing_config.get("TIPO_EQUIPAMENTO", {}).items():
     st.sidebar.metric(label=f"Preço {equip_type}", value=f"R$ {price:,.2f}")
 
