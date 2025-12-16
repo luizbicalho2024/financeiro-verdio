@@ -17,6 +17,7 @@ class PDF(FPDF):
     def header(self):
         try:
             page_width = self.w - self.l_margin - self.r_margin
+            # Posiciona a imagem do cabeçalho
             self.image("imgs/header1.png", x=self.l_margin, y=8, w=page_width)
         except Exception:
             self.set_font("Arial", "B", 20)
@@ -25,6 +26,7 @@ class PDF(FPDF):
 
     def footer(self):
         try:
+            # Posiciona o rodapé a 35mm do final da página
             self.set_y(-35)
             page_width = self.w - self.l_margin - self.r_margin
             self.image("imgs/footer1.png", x=self.l_margin, y=self.get_y(), w=page_width)
@@ -129,54 +131,100 @@ def to_excel(df_cheio, df_ativados, df_desativados, df_suspensos):
 
 def create_pdf_report(nome_cliente, periodo, totais, df_cheio, df_ativados, df_desativados, df_suspensos):
     pdf = PDF(orientation='P')
-    pdf.set_top_margin(40); pdf.set_auto_page_break(auto=True, margin=40); pdf.add_page()
+    # Margem superior 40mm para caber o header
+    pdf.set_top_margin(40)
+    # Quebra de página automática com 45mm de margem inferior (para não bater no footer de 35mm)
+    pdf.set_auto_page_break(auto=True, margin=45)
+    pdf.add_page()
+
     pdf.set_font("Arial", "B", 16); pdf.cell(0, 10, "Resumo do Faturamento", 0, 1, "C"); pdf.ln(5)
     pdf.set_font("Arial", "", 12); pdf.cell(0, 8, f"Cliente: {nome_cliente}", 0, 1, "L"); pdf.cell(0, 8, f"Período: {periodo}", 0, 1, "L"); pdf.ln(5)
-    pdf.set_font("Arial", "B", 9); table_width = pdf.w - pdf.l_margin - pdf.r_margin; col_width = table_width / 5
+    
+    # Tabela de Totais
+    pdf.set_font("Arial", "B", 9)
+    table_width = pdf.w - pdf.l_margin - pdf.r_margin
+    col_width = table_width / 5
     pdf.cell(col_width, 8, "Nº Fat. Cheio", 1, 0, "C"); pdf.cell(col_width, 8, "Nº Fat. Proporcional", 1, 0, "C"); pdf.cell(col_width, 8, "Nº Suspensos", 1, 0, "C")
     pdf.cell(col_width, 8, "Total GPRS", 1, 0, "C"); pdf.cell(col_width, 8, "Total Satelitais", 1, 1, "C")
+    
     pdf.set_font("Arial", "", 9)
     pdf.cell(col_width, 8, str(totais['terminais_cheio']), 1, 0, "C"); pdf.cell(col_width, 8, str(totais['terminais_proporcional']), 1, 0, "C"); pdf.cell(col_width, 8, str(totais['terminais_suspensos']), 1, 0, "C")
     pdf.cell(col_width, 8, str(totais['terminais_gprs']), 1, 0, "C"); pdf.cell(col_width, 8, str(totais['terminais_satelitais']), 1, 1, "C"); pdf.ln(5)
+    
     pdf.set_font("Arial", "B", 11); pdf.cell(table_width / 2, 8, "Faturamento (Cheio)", 1, 0, "C"); pdf.cell(table_width / 2, 8, "Faturamento (Proporcional)", 1, 1, "C")
     pdf.set_font("Arial", "", 11); pdf.cell(table_width / 2, 8, f"R$ {totais['cheio']:,.2f}", 1, 0, "C"); pdf.cell(table_width / 2, 8, f"R$ {totais['proporcional']:,.2f}", 1, 1, "C")
     pdf.set_font("Arial", "B", 11); pdf.cell(0, 10, f"FATURAMENTO TOTAL: R$ {totais['geral']:,.2f}", 1, 1, "C"); pdf.ln(10)
     
     def draw_table(title, df, col_widths, available_cols, header_map):
         if not df.empty:
-            pdf.set_font("Arial", "B", 12); pdf.cell(0, 10, title, 0, 1, "L"); pdf.set_font("Arial", "B", 7)
+            pdf.set_font("Arial", "B", 12)
+            # Verifica se cabe o título, senão quebra página
+            if pdf.get_y() > pdf.h - 60:
+                pdf.add_page()
+            
+            pdf.cell(0, 10, title, 0, 1, "L")
+            pdf.set_font("Arial", "B", 7)
+            
             header = [h for h in available_cols if h in df.columns]
-            header_row_height = 8; y_start = pdf.get_y(); x_start = pdf.get_x()
-            for h in header: pdf.cell(col_widths.get(h, 20), header_row_height, '', border=1, ln=0, align='C')
-            pdf.set_xy(x_start, y_start); current_x = x_start
+            header_row_height = 8
+            y_start = pdf.get_y()
+            x_start = pdf.get_x()
+            
+            # Desenha bordas do cabeçalho
             for h in header:
-                width = col_widths.get(h, 20); header_text = header_map.get(h, h)
-                pdf.set_x(current_x); pdf.multi_cell(width, 4, header_text, border=0, align='C'); current_x += width; pdf.set_y(y_start)
+                pdf.cell(col_widths.get(h, 20), header_row_height, '', border=1, ln=0, align='C')
+            
+            # Desenha texto do cabeçalho
+            pdf.set_xy(x_start, y_start)
+            current_x = x_start
+            for h in header:
+                width = col_widths.get(h, 20)
+                header_text = header_map.get(h, h)
+                pdf.set_x(current_x)
+                pdf.multi_cell(width, 4, header_text, border=0, align='C')
+                current_x += width
+                pdf.set_y(y_start)
+            
             pdf.set_y(y_start + header_row_height)
+            
+            # Linhas da tabela
             pdf.set_font("Arial", "", 6)
             for _, row in df.iterrows():
                 for h in header:
                     cell_text = str(row[h])
-                    if isinstance(row[h], datetime) and pd.notna(row[h]): cell_text = row[h].strftime('%d/%m/%Y')
-                    elif isinstance(row[h], (float, int)): cell_text = f"R$ {row[h]:,.2f}" if 'Valor' in h else str(row[h])
-                    elif pd.isna(row[h]): cell_text = ""
+                    if isinstance(row[h], datetime) and pd.notna(row[h]):
+                        cell_text = row[h].strftime('%d/%m/%Y')
+                    elif isinstance(row[h], (float, int)):
+                        if 'Valor' in h:
+                            cell_text = f"R$ {row[h]:,.2f}"
+                        else:
+                            cell_text = str(row[h])
+                    elif pd.isna(row[h]):
+                        cell_text = ""
+                    
+                    # Truncar texto se for muito longo para evitar quebra de layout
                     pdf.cell(col_widths.get(h, 20), 6, cell_text, 1, 0, 'C')
                 pdf.ln()
-            pdf.ln(5)
             
+            # Só adiciona espaço se não estiver no fim da página (EVITA PÁGINA EM BRANCO)
+            if pdf.get_y() < pdf.h - 55:
+                pdf.ln(5)
+
     header_map = {'Nº Equipamento': 'Nº\nEquipamento', 'Valor a Faturar': 'Valor a\nFaturar', 'Data Ativação': 'Data\nAtivação', 'Data Desativação': 'Data\nDesativação', 'Dias Ativos Mês': 'Dias\nAtivos', 'Suspenso Dias Mes': 'Dias\nSuspensos', 'Dias a Faturar': 'Dias a\nFaturar', 'Valor Unitario': 'Valor\nUnitário'}
     
-    # AJUSTE AQUI: Larguras ajustadas para totalizar 190 (caber na página A4)
+    # LARGURAS CORRIGIDAS: Soma = 190mm (Limite útil A4)
     widths_cheio = {'Terminal': 38, 'Nº Equipamento': 38, 'Placa': 25, 'Modelo': 34, 'Tipo': 20, 'Valor a Faturar': 35}
     
     draw_table("Detalhamento do Faturamento Cheio", df_cheio, widths_cheio, list(widths_cheio.keys()), header_map)
+    
     widths_proporcional = {'Terminal': 22, 'Nº Equipamento': 22, 'Placa': 22, 'Tipo': 15, 'Data Ativação': 18, 'Data Desativação': 18, 'Dias Ativos Mês': 15, 'Suspenso Dias Mes': 18, 'Dias a Faturar': 15, 'Valor Unitario': 20, 'Valor a Faturar': 20}
     cols_proporcionais = ['Terminal', 'Nº Equipamento', 'Modelo', 'Tipo', 'Data Ativação', 'Data Desativação', 'Dias Ativos Mês', 'Suspenso Dias Mes', 'Dias a Faturar', 'Valor Unitario', 'Valor a Faturar']
+    
     draw_table("Detalhamento Proporcional (Ativações no Mês)", df_ativados, widths_proporcional, cols_proporcionais, header_map)
     draw_table("Detalhamento Proporcional (Desativações no Mês)", df_desativados, widths_proporcional, cols_proporcionais, header_map)
     draw_table("Detalhamento dos Terminais Suspensos (Faturamento Prop.)", df_suspensos, widths_proporcional, cols_proporcionais, header_map)
     
-    return bytes(pdf.output(dest='S').encode('latin-1'))
+    return bytes(pdf.output(dest='S').encode('latin-1', errors='replace'))
 
 # --- 3. INTERFACE DA PÁGINA ---
 st.image("imgs/logo.png", width=250)
