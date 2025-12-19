@@ -112,8 +112,11 @@ for col in cols_num:
     else:
         df[col] = 0.0
 
-df['data_geracao'] = pd.to_datetime(df['data_geracao'])
+# CORREÇÃO DE WARNING (Timezone): Remove o fuso horário antes de converter para período
+df['data_geracao'] = pd.to_datetime(df['data_geracao']).dt.tz_localize(None)
 df['mes_ano'] = df['data_geracao'].dt.to_period('M').astype(str)
+# Garante que cliente seja string para evitar erros de comparação
+df['cliente'] = df['cliente'].astype(str)
 
 # Filtro de Período
 st.markdown("---")
@@ -135,6 +138,7 @@ st.markdown("Atribua os vendedores aos clientes abaixo e clique em Salvar.")
 df_to_edit = df_filtered[['cliente', 'valor_total', 'terminais_cheio', 'terminais_proporcional', 'Vendedor']].copy()
 df_to_edit = df_to_edit.rename(columns={'cliente': 'Cliente', 'valor_total': 'Faturamento (R$)', 'terminais_cheio': 'Terminais Base', 'terminais_proporcional': 'Ativações'})
 
+# CORREÇÃO DE WARNING: width='stretch' ao invés de use_container_width=True
 edited_df = st.data_editor(
     df_to_edit,
     column_config={
@@ -144,17 +148,24 @@ edited_df = st.data_editor(
         "Ativações": st.column_config.NumberColumn(disabled=True),
         "Vendedor": st.column_config.TextColumn("Vendedor Responsável")
     },
-    use_container_width=True, hide_index=True, num_rows="fixed"
+    width="stretch", 
+    hide_index=True, 
+    num_rows="fixed",
+    key="editor_vendedores"
 )
 
 if st.button("💾 Salvar Vínculos", type="primary"):
-    new_mappings = {k: v for k, v in dict(zip(edited_df['Cliente'], edited_df['Vendedor'])).items() if v and str(v).strip() != ""}
+    # Garante que chaves e valores sejam strings limpas
+    new_mappings = {str(k).strip(): str(v).strip() for k, v in dict(zip(edited_df['Cliente'], edited_df['Vendedor'])).items() if v and str(v).strip() != ""}
     if save_seller_mappings(new_mappings): st.cache_data.clear(); st.rerun()
 
-# --- 4. CÁLCULO DA COMISSÃO (LÓGICA NOVA) ---
+# --- 4. CÁLCULO DA COMISSÃO (LÓGICA REVISADA) ---
 st.markdown("---"); st.subheader("📊 Relatório de Comissões Calculado")
 
-if not edited_df['Vendedor'].str.strip().astype(bool).any():
+# Verifica se há algum vendedor digitado no editor visual
+has_sellers = edited_df['Vendedor'].str.strip().astype(bool).any()
+
+if not has_sellers:
     st.info("👆 Preencha a coluna 'Vendedor Responsável' acima e salve para ver os cálculos.")
 else:
     # Função para determinar a % de comissão baseada na regra
@@ -168,44 +179,38 @@ else:
         if ratio >= 1.20: return 0.30          # 30%
         return 0.0                             # < 80%
 
-    # Aplicar cálculo linha a linha
-    commissions = []
-    
-    # Mapear dados originais de volta para o edited_df
-    # Precisamos dos dados detalhados (gprs/satelite) que não estão no edited_df visual, mas estão no df_filtered
-    # Vamos iterar sobre o df_filtered e usar o Vendedor do edited_df
-    
-    # Criar mapa de cliente -> vendedor atualizado
-    current_seller_map = dict(zip(edited_df['Cliente'], edited_df['Vendedor']))
+    # Cria um mapa atualizado direto do editor para garantir que o que o usuário vê é o que é calculado
+    # Usamos .strip() para evitar erros com espaços em branco
+    current_seller_map = {str(k).strip(): str(v).strip() for k, v in zip(edited_df['Cliente'], edited_df['Vendedor'])}
     
     results = []
     
     for idx, row in df_filtered.iterrows():
-        client = row['cliente']
-        seller = current_seller_map.get(client, "")
+        client_name = str(row['cliente']).strip()
+        seller = current_seller_map.get(client_name, "")
         
-        if not seller or not str(seller).strip():
+        # Pula se não tiver vendedor atribuído na tabela visual
+        if not seller:
             continue
             
         total_invoice = row['valor_total']
         
-        # Se faturamento menor que meta, comissão é zero
-        if total_invoice < meta_minima:
-            results.append({'Vendedor': seller, 'Cliente': client, 'Faturamento': total_invoice, 'Comissao': 0.0, 'Bonus': 0.0})
+        # Se faturamento menor que meta (e meta > 0), registra, mas comissão zerada
+        if meta_minima > 0 and total_invoice < meta_minima:
+            results.append({'Vendedor': seller, 'Cliente': client_name, 'Faturamento': total_invoice, 'Comissao': 0.0, 'Bonus': 0.0, 'Total Pagar': 0.0})
             continue
 
         # Dados GPRS
         count_gprs = row['terminais_gprs']
         price_gprs_billed = row['valor_unitario_gprs']
-        base_gprs = base_prices['GPRS']
+        base_gprs = base_prices.get('GPRS', 59.90)
         
         # Dados Satélite
         count_sat = row['terminais_satelitais']
         price_sat_billed = row['valor_unitario_satelital']
-        base_sat = base_prices['SATELITE']
+        base_sat = base_prices.get('SATELITE', 159.90)
         
-        # Calcular Receita Teórica de cada parte para rateio do Valor Total Real
-        # (O valor total pode incluir pró-rata, descontos, etc, então ponderamos pelo peso teórico)
+        # Calcular Pesos para Rateio
         weight_gprs = count_gprs * price_gprs_billed
         weight_sat = count_sat * price_sat_billed
         total_weight = weight_gprs + weight_sat
@@ -214,7 +219,7 @@ else:
         comm_sat = 0.0
         
         if total_weight > 0:
-            # Rateio do valor total da nota
+            # Rateio do valor total da nota (pois pode ter pro-rata, descontos, etc)
             revenue_gprs_real = total_invoice * (weight_gprs / total_weight)
             revenue_sat_real = total_invoice * (weight_sat / total_weight)
             
@@ -232,7 +237,7 @@ else:
         
         results.append({
             'Vendedor': seller,
-            'Cliente': client,
+            'Cliente': client_name,
             'Faturamento': total_invoice,
             'Comissao': total_comm,
             'Bonus': bonus,
@@ -259,7 +264,7 @@ else:
 
         st.markdown("### Resumo por Vendedor")
         st.dataframe(
-            resumo, use_container_width=True, hide_index=True,
+            resumo, width="stretch", hide_index=True,
             column_config={
                 "Faturamento": st.column_config.NumberColumn(format="R$ %.2f"),
                 "Comissao": st.column_config.NumberColumn(format="R$ %.2f"),
@@ -283,6 +288,6 @@ else:
         )
         
         with st.expander("Ver Detalhamento dos Cálculos"):
-            st.dataframe(df_results, use_container_width=True)
+            st.dataframe(df_results, width="stretch")
     else:
-        st.warning("Nenhum cálculo gerado (verifique se há vendedores atribuídos).")
+        st.warning("Nenhum cálculo gerado. Certifique-se de que os vendedores foram atribuídos e que os clientes possuem faturamento no período.")
