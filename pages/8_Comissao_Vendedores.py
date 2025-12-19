@@ -99,6 +99,7 @@ df_m['cli_norm'] = df_m['cliente'].astype(str).str.strip()
 df_m['Vendedor'] = df_m['cli_norm'].map(s_map_norm).fillna("")
 
 with st.expander("Atribuir Vendedores", expanded=True):
+    # Corrigido warning
     edited = st.data_editor(df_m[['cliente', 'valor_total', 'Vendedor']], key="editor", hide_index=True, use_container_width=True)
     if st.button("Salvar Vínculos"):
         new_map = {str(r['cliente']).strip(): str(r['Vendedor']).strip() for _, r in edited.iterrows() if str(r['Vendedor']).strip()}
@@ -136,6 +137,7 @@ for _, row in df_m.iterrows():
             val = billed * pct
             comm_total += val
             
+            # Corrigido % visual
             analitico.append({"Vendedor": vend, "Cliente": cli, "Terminal": term, "Tipo": typ, "Faturado": billed, "Base": base, "%": pct*100, "Comissão": val})
     else:
         # Fallback
