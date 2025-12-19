@@ -165,22 +165,46 @@ def update_type_for_models(updates):
 
 @st.cache_data(ttl=3600)
 def get_pricing_config():
-    """Busca as configurações de preço do Firestore."""
+    """
+    Busca as configurações de preço do Firestore.
+    Retorna uma estrutura normalizada com 3 preços por tipo.
+    """
+    defaults = {"GPRS": 59.90, "SATELITE": 159.90, "CAMERA": 0.0, "RADIO": 0.0}
+    
     try:
         config_doc = db.collection("settings").document("pricing").get()
-        if config_doc.exists:
-            return config_doc.to_dict()
+        data = config_doc.to_dict() if config_doc.exists else {}
     except Exception as e:
-        st.warning(f"Não foi possível buscar configurações de preço: {e}. Usando valores padrão.")
+        st.warning(f"Erro ao buscar configurações de preço: {e}. Usando valores padrão.")
+        data = {}
+
+    tipo_equip = data.get("TIPO_EQUIPAMENTO", {})
+    normalized_types = {}
     
-    return {
-        "TIPO_EQUIPAMENTO": {
-            "GPRS": 59.90,
-            "SATELITE": 159.90,
-            "CAMERA": 0.0,
-            "RADIO": 0.0,
-        }
-    }
+    # Garante que todos os tipos (padrão e existentes) tenham a estrutura correta
+    all_keys = set(tipo_equip.keys()) | set(defaults.keys())
+    
+    for key in all_keys:
+        val = tipo_equip.get(key, defaults.get(key, 0.0))
+        
+        if isinstance(val, (int, float)):
+            # Converte formato antigo (float) para novo formato (dict com 3 preços)
+            normalized_types[key] = {
+                "price1": float(val),
+                "price2": float(val),
+                "price3": float(val)
+            }
+        elif isinstance(val, dict):
+            # Garante que as chaves existam e sejam float
+            normalized_types[key] = {
+                "price1": float(val.get("price1", 0.0)),
+                "price2": float(val.get("price2", 0.0)),
+                "price3": float(val.get("price3", 0.0))
+            }
+        else:
+            normalized_types[key] = {"price1": 0.0, "price2": 0.0, "price3": 0.0}
+            
+    return {"TIPO_EQUIPAMENTO": normalized_types}
 
 def update_pricing_config(new_prices):
     """Atualiza as configurações de preço no Firestore."""
