@@ -58,31 +58,48 @@ def get_last_billing_for_client(client_name):
 def log_faturamento(faturamento_data, detalhes_itens=None):
     """
     Salva um registro de faturamento gerado no Firestore.
-    Agora suporta salvar o 'detalhes_itens' (lista de dicionários) para cálculo de comissão item a item.
+    REGRA: Mantém apenas UM registro por Cliente/Período (sobrescreve anteriores).
     """
     try:
         user_email = st.session_state.get("user_info", {}).get("email", "sistema")
-        
-        # Dados principais do cabeçalho
+        cliente = faturamento_data.get("cliente")
+        periodo = faturamento_data.get("periodo_relatorio")
+
+        # --- 1. VERIFICAR DUPLICIDADE E LIMPAR ANTIGOS ---
+        if cliente and periodo:
+            # Busca registros existentes para o mesmo cliente e período
+            existing_docs = db.collection("billing_history")\
+                .where("cliente", "==", cliente)\
+                .where("periodo_relatorio", "==", periodo)\
+                .stream()
+            
+            deleted_count = 0
+            for doc in existing_docs:
+                doc.reference.delete()
+                deleted_count += 1
+            
+            if deleted_count > 0:
+                log_action("WARNING", user_email, f"Substituição de Faturamento: {deleted_count} registro(s) anterior(es) removido(s) para {cliente} - {periodo}.")
+
+        # --- 2. PREPARAR NOVO REGISTRO ---
         faturamento_data.update({
             "data_geracao": datetime.now(),
             "gerado_por": user_email
         })
         
-        # Se houver itens detalhados (terminais), adiciona ao payload
+        # Adiciona detalhes item a item se houver
         if detalhes_itens is not None and isinstance(detalhes_itens, list):
-            # Firestore tem limite de tamanho por documento (1MB). 
-            # Se a lista for muito grande, ideal seria salvar em subcoleção, 
-            # mas para uso moderado, salvar dentro do documento funciona.
             faturamento_data["itens_detalhados"] = detalhes_itens
 
+        # --- 3. SALVAR NOVO REGISTRO ---
         db.collection("billing_history").add(faturamento_data)
         
-        # Log sem os detalhes pesados
+        # Log de sistema (sem os detalhes pesados para economizar espaço no log visual)
         log_data_summary = {k: v for k, v in faturamento_data.items() if k != "itens_detalhados"}
-        log_action("INFO", user_email, "Relatório de faturamento gerado e salvo.", log_data_summary)
+        log_action("INFO", user_email, f"Novo faturamento salvo para {cliente} ({periodo}).", log_data_summary)
         
-        st.toast("Histórico de faturamento (com detalhes) salvo com sucesso!")
+        st.toast(f"Histórico salvo! (Versão anterior do mês substituída, se existia)", icon="✅")
+        
     except Exception as e:
         st.error(f"Erro ao salvar o histórico de faturamento: {e}")
 
@@ -91,8 +108,8 @@ def delete_billing_history(history_id):
     try:
         db.collection("billing_history").document(history_id).delete()
         user_email = st.session_state.get("user_info", {}).get("email", "sistema")
-        log_action("WARNING", user_email, f"Registro de histórico de faturamento excluído.", {"history_id": history_id})
-        st.success("Registro de histórico excluído com sucesso!")
+        log_action("WARNING", user_email, f"Registro de histórico de faturamento excluído manualmente.", {"history_id": history_id})
+        st.success("Registro excluído com sucesso!")
         return True
     except Exception as e:
         st.error(f"Erro ao excluir o registro de histórico: {e}")
@@ -169,10 +186,6 @@ def update_type_for_models(updates):
 
 @st.cache_data(ttl=3600)
 def get_pricing_config():
-    """
-    Busca as configurações de preço do Firestore.
-    Retorna estrutura normalizada com 3 preços por tipo.
-    """
     defaults = {"GPRS": 59.90, "SATELITE": 159.90, "CAMERA": 0.0, "RADIO": 0.0}
     try:
         config_doc = db.collection("settings").document("pricing").get()
