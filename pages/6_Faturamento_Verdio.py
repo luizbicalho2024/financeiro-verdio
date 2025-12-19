@@ -251,7 +251,6 @@ if uploaded_file:
         st.markdown("---"); st.subheader("Ações Finais")
         
         # --- PREPARAÇÃO DOS DADOS DETALHADOS PARA SALVAR NO BANCO ---
-        # Convertemos o DataFrame final para uma lista de dicionários para salvar junto com o cabeçalho
         cols_to_save = ['Terminal', 'Nº Equipamento', 'Modelo', 'Tipo', 'Categoria', 'Valor Unitario', 'Valor a Faturar', 'Dias a Faturar']
         detalhes_itens = df_final[cols_to_save].to_dict(orient='records')
         
@@ -266,13 +265,22 @@ if uploaded_file:
         
         pdf_data = create_pdf_report(nome_cliente, periodo_relatorio, {"cheio": total_cheio, "proporcional": total_proporcional, "geral": total_geral, "terminais_cheio": len(df_cheio), "terminais_proporcional": num_prop, "terminais_suspensos": len(df_suspensos), "terminais_gprs": len(df_final[df_final['Tipo'] == 'GPRS']), "terminais_satelitais": len(df_final[df_final['Tipo'] == 'SATELITE'])}, df_cheio, df_ativados, df_desativados, df_suspensos)
         
-        # --- BOTÃO COM A NOVA ASSINATURA DE LOG (PASSANDO DETALHES) ---
         c1, c2 = st.columns(2)
         c1.download_button("📥 Exportar Excel e Salvar Histórico", excel_data, f"Faturamento_{nome_cliente.replace(' ', '_')}_{datetime.now().strftime('%Y-%m')}.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", on_click=umdb.log_faturamento, args=(log_data, detalhes_itens))
         c2.download_button("📄 Exportar Resumo em PDF", pdf_data, f"Resumo_Faturamento_{nome_cliente.replace(' ', '_')}_{datetime.now().strftime('%Y-%m')}.pdf", "application/pdf", on_click=umdb.log_faturamento, args=(log_data, detalhes_itens))
 
         st.markdown("---")
+        
+        # --- EXIBIÇÃO DAS TABELAS (CORRIGIDO: TODAS AS TABELAS VOLTARAM) ---
+        cols_to_show = ['Terminal', 'Nº Equipamento', 'Modelo', 'Tipo', 'Data Ativação', 'Dias Ativos Mês', 'Suspenso Dias Mes', 'Dias a Faturar', 'Valor Unitario', 'Valor a Faturar']
+        
         with st.expander("Detalhamento do Faturamento Cheio"):
             st.dataframe(df_cheio[['Terminal', 'Nº Equipamento', 'Modelo', 'Tipo', 'Dias a Faturar', 'Valor a Faturar']], use_container_width=True, hide_index=True)
+        with st.expander("Detalhamento Proporcional (Ativações no Mês)"):
+            st.dataframe(df_ativados[cols_to_show], use_container_width=True, hide_index=True)
+        with st.expander("Detalhamento Proporcional (Desativações no Mês)"):
+            st.dataframe(df_desativados[cols_to_show], use_container_width=True, hide_index=True)
+        with st.expander("Detalhamento dos Terminais Suspensos (Faturamento Proporcional)"):
+            st.dataframe(df_suspensos[cols_to_show], use_container_width=True, hide_index=True)
 else:
     st.info("Aguardando o carregamento do relatório para iniciar a análise.")
