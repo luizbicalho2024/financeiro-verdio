@@ -1,4 +1,6 @@
-import sys, os, io
+import sys
+import os
+import io
 import pandas as pd
 import streamlit as st
 
@@ -8,6 +10,7 @@ import auth_functions as af
 from firebase_config import db
 
 st.set_page_config(layout="wide", page_title="Comissões", page_icon="💰")
+
 if "user_info" not in st.session_state: st.stop()
 if st.session_state.get("role", "Usuário").lower() != "admin": st.error("Restrito."); st.stop()
 
@@ -41,7 +44,6 @@ def save_seller_map(data):
 settings = get_settings()
 pricing = umdb.get_pricing_config().get("TIPO_EQUIPAMENTO", {})
 
-# Opções de Preço Base
 price_opts = {"price1": "Preço 1 (Mínimo)", "price2": "Preço 2 (Médio)", "price3": "Preço 3 (Padrão)"}
 rev_price = {v: k for k, v in price_opts.items()}
 
@@ -87,7 +89,7 @@ if 'data_geracao' in df.columns:
 periodos = sorted(df['mes'].unique(), reverse=True)
 sel_per = st.sidebar.selectbox("Mês Competência:", periodos)
 
-# Deduplicação
+# Deduplicação: Mais recente primeiro, drop duplicates por cliente
 df_m = df[df['mes'] == sel_per].copy().sort_values('data_geracao', ascending=False).drop_duplicates('cliente', keep='first')
 
 # Vínculo Vendedores
@@ -135,7 +137,6 @@ for _, row in df_m.iterrows():
             comm_total += val
             
             analitico.append({"Vendedor": vend, "Cliente": cli, "Terminal": term, "Tipo": typ, "Faturado": billed, "Base": base, "%": pct*100, "Comissão": val})
-            
     else:
         # Fallback
         billed = float(row.get('valor_total', 0))
@@ -162,10 +163,20 @@ with tab_resumo:
     
     # Grouped
     df_grp = df_res.groupby("Vendedor").sum(numeric_only=True).reset_index()
-    st.dataframe(df_grp, hide_index=True, use_container_width=True, column_config={"Faturamento": st.column_config.NumberColumn(format="R$ %.2f"), "Comissão": st.column_config.NumberColumn(format="R$ %.2f"), "Bônus": st.column_config.NumberColumn(format="R$ %.2f"), "Total": st.column_config.NumberColumn(format="R$ %.2f")})
+    st.dataframe(
+        df_grp, 
+        hide_index=True, 
+        use_container_width=True, 
+        column_config={"Faturamento": st.column_config.NumberColumn(format="R$ %.2f"), "Comissão": st.column_config.NumberColumn(format="R$ %.2f"), "Bônus": st.column_config.NumberColumn(format="R$ %.2f"), "Total": st.column_config.NumberColumn(format="R$ %.2f")}
+    )
 
 with tab_analitico:
-    st.dataframe(df_ana, hide_index=True, use_container_width=True, column_config={"Faturado": st.column_config.NumberColumn(format="R$ %.2f"), "Base": st.column_config.NumberColumn(format="R$ %.2f"), "%": st.column_config.NumberColumn(format="%.1f%%"), "Comissão": st.column_config.NumberColumn(format="R$ %.2f")})
+    st.dataframe(
+        df_ana, 
+        hide_index=True, 
+        use_container_width=True, 
+        column_config={"Faturado": st.column_config.NumberColumn(format="R$ %.2f"), "Base": st.column_config.NumberColumn(format="R$ %.2f"), "%": st.column_config.NumberColumn(format="%.1f%%"), "Comissão": st.column_config.NumberColumn(format="R$ %.2f")}
+    )
 
 # Export
 def to_excel(r, a):
