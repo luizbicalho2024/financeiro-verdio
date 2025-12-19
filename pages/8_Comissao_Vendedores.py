@@ -10,7 +10,7 @@ from datetime import datetime
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 import user_management_db as umdb
-from firebase_config import db  # Importação direta para salvar os mapeamentos de vendedores
+from firebase_config import db
 
 # --- CONFIGURAÇÃO DA PÁGINA ---
 st.set_page_config(layout="wide", page_title="Comissões e Premiações", page_icon="💰")
@@ -20,7 +20,6 @@ if "user_info" not in st.session_state:
     st.error("🔒 Acesso Negado! Por favor, faça login para visualizar esta página.")
     st.stop()
 
-# Apenas Admins devem ter acesso a dados financeiros sensíveis
 if st.session_state.get("role", "Usuário").lower() != "admin":
     st.error("🚫 Acesso restrito a Administradores.")
     st.stop()
@@ -34,20 +33,17 @@ if st.sidebar.button("Logout"):
         del st.session_state[key]
     st.switch_page("1_Home.py")
 
-# --- FUNÇÕES DE BANCO DE DADOS (ESPECÍFICAS DESTA PÁGINA) ---
+# --- FUNÇÕES DE BANCO DE DADOS ---
 def get_seller_mappings():
-    """Busca o mapeamento de Cliente -> Vendedor no Firestore."""
     try:
         doc = db.collection("settings").document("seller_mappings").get()
-        if doc.exists:
-            return doc.to_dict()
+        if doc.exists: return doc.to_dict()
         return {}
     except Exception as e:
         st.error(f"Erro ao carregar vendedores: {e}")
         return {}
 
 def save_seller_mappings(mapping_data):
-    """Salva o mapeamento de Cliente -> Vendedor."""
     try:
         db.collection("settings").document("seller_mappings").set(mapping_data, merge=True)
         st.toast("Vendedores vinculados com sucesso!", icon="✅")
@@ -56,63 +52,65 @@ def save_seller_mappings(mapping_data):
         st.error(f"Erro ao salvar vendedores: {e}")
         return False
 
-# --- TÍTULO E INTRODUÇÃO ---
+# --- TÍTULO ---
 st.title("💰 Gestão de Comissões e Premiações")
-st.markdown("Defina as regras de comissão, vincule vendedores aos clientes e gere os relatórios de pagamento.")
+st.markdown("Defina as regras, vincule vendedores e gere os relatórios baseados no desempenho de vendas.")
 
-# --- 1. CONFIGURAÇÃO DE REGRAS (BASE DE CÁLCULO) ---
-with st.expander("⚙️ Configuração da Base de Cálculo (Regras de Comissão)", expanded=True):
-    st.info("Ajuste os valores abaixo conforme a política de premiação atual.")
+# --- 1. CONFIGURAÇÃO DE REGRAS (Visualização) ---
+with st.expander("⚙️ Regras de Comissão Ativas", expanded=True):
+    st.info("ℹ️ A comissão sobre o faturamento agora é calculada automaticamente baseada na tabela abaixo:")
     
-    col_rule1, col_rule2, col_rule3 = st.columns(3)
+    col_info, col_inputs = st.columns([2, 1])
     
-    with col_rule1:
-        comissao_percentual = st.number_input(
-            "Comissão sobre Faturamento (%)", 
-            min_value=0.0, 
-            max_value=100.0, 
-            value=10.0, 
-            step=0.5,
-            help="Porcentagem aplicada sobre o Valor Total da fatura (Recorrência)."
-        )
+    with col_info:
+        st.markdown("""
+        **Regra de Escalonamento (Baseada no Preço 1 do Estoque):**
+        - 🔴 **0% Comissão:** Se valor cobrado < 80% do valor base.
+        - 🟠 **2% Comissão:** Se valor cobrado estiver entre **80% e 99%** do valor base.
+        - 🟢 **15% Comissão:** Se valor cobrado estiver entre **100% e 119%** do valor base.
+        - 🔵 **30% Comissão:** Se valor cobrado for **maior ou igual a 120%** do valor base.
+        """)
     
-    with col_rule2:
+    with col_inputs:
+        st.markdown("**Outras Premiações:**")
         bonus_ativacao = st.number_input(
-            "Bônus por Ativação/Novo (R$)", 
-            min_value=0.0, 
-            value=50.00, 
-            step=10.0,
-            help="Valor fixo pago por cada terminal 'Proporcional' (indicativo de novas ativações no mês)."
+            "Bônus por Ativação (R$)", 
+            min_value=0.0, value=50.00, step=10.0,
+            help="Valor fixo pago por cada terminal novo (Proporcional)."
         )
-        
-    with col_rule3:
         meta_minima = st.number_input(
-            "Faturamento Mínimo para Comissão (R$)",
-            min_value=0.0,
-            value=0.0,
-            help="O vendedor só recebe comissão se a fatura do cliente for superior a este valor."
+            "Faturamento Mínimo (R$)",
+            min_value=0.0, value=0.0,
+            help="O vendedor só recebe se a fatura do cliente for superior a este valor."
         )
 
-# --- 2. CARREGAMENTO E PREPARAÇÃO DOS DADOS ---
+# --- 2. CARREGAMENTO DE DADOS ---
 history_data = umdb.get_billing_history()
+pricing_config = umdb.get_pricing_config().get("TIPO_EQUIPAMENTO", {})
+
+# Extrair Preços Base (Price 1) para comparação
+base_prices = {
+    "GPRS": pricing_config.get("GPRS", {}).get("price1", 59.90),
+    "SATELITE": pricing_config.get("SATELITE", {}).get("price1", 159.90)
+}
 
 if not history_data:
-    st.warning("Nenhum histórico de faturamento encontrado para calcular comissões.")
+    st.warning("Nenhum histórico de faturamento encontrado.")
     st.stop()
 
-# Carrega mapeamento de vendedores salvo
 seller_map = get_seller_mappings()
-
 df = pd.DataFrame(history_data)
 
-# --- CORREÇÃO DE TIPOS DE DADOS (CRUCIAL PARA O DATA_EDITOR) ---
-# Garante que as colunas numéricas sejam float/int e preenche nulos com 0
-if 'valor_total' in df.columns:
-    df['valor_total'] = pd.to_numeric(df['valor_total'], errors='coerce').fillna(0.0)
-if 'terminais_cheio' in df.columns:
-    df['terminais_cheio'] = pd.to_numeric(df['terminais_cheio'], errors='coerce').fillna(0).astype(int)
-if 'terminais_proporcional' in df.columns:
-    df['terminais_proporcional'] = pd.to_numeric(df['terminais_proporcional'], errors='coerce').fillna(0).astype(int)
+# Tratamento de Tipos
+cols_num = ['valor_total', 'terminais_cheio', 'terminais_proporcional', 
+            'terminais_gprs', 'terminais_satelitais', 
+            'valor_unitario_gprs', 'valor_unitario_satelital']
+
+for col in cols_num:
+    if col in df.columns:
+        df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+    else:
+        df[col] = 0.0
 
 df['data_geracao'] = pd.to_datetime(df['data_geracao'])
 df['mes_ano'] = df['data_geracao'].dt.to_period('M').astype(str)
@@ -123,142 +121,168 @@ col_filt1, col_filt2 = st.columns([1, 3])
 with col_filt1:
     periodos_disponiveis = sorted(df['mes_ano'].unique(), reverse=True)
     if periodos_disponiveis:
-        periodo_selecionado = st.selectbox("Selecione o Mês de Competência:", periodos_disponiveis)
+        periodo_selecionado = st.selectbox("Selecione o Mês:", periodos_disponiveis)
     else:
-        st.warning("Nenhum período disponível.")
-        st.stop()
+        st.warning("Nenhum período disponível."); st.stop()
 
-# Filtra dados pelo mês
 df_filtered = df[df['mes_ano'] == periodo_selecionado].copy()
-
-# Adiciona coluna de Vendedor baseada no mapeamento salvo
-# CORREÇÃO: fillna("") e astype(str) garantem que a coluna seja compatível com TextColumn
 df_filtered['Vendedor'] = df_filtered['cliente'].map(seller_map).fillna("").astype(str)
 
 # --- 3. EDITOR DE VENDEDORES ---
 st.subheader(f"Vínculo de Vendedores - {periodo_selecionado}")
-st.markdown("Atribua os vendedores aos clientes abaixo. **As alterações são salvas automaticamente ao clicar no botão 'Salvar' abaixo da tabela.**")
+st.markdown("Atribua os vendedores aos clientes abaixo e clique em Salvar.")
 
-# Prepara o DataFrame para edição
 df_to_edit = df_filtered[['cliente', 'valor_total', 'terminais_cheio', 'terminais_proporcional', 'Vendedor']].copy()
-df_to_edit = df_to_edit.rename(columns={
-    'cliente': 'Cliente',
-    'valor_total': 'Faturamento (R$)',
-    'terminais_cheio': 'Terminais Base',
-    'terminais_proporcional': 'Novas Ativações/Prop.',
-})
+df_to_edit = df_to_edit.rename(columns={'cliente': 'Cliente', 'valor_total': 'Faturamento (R$)', 'terminais_cheio': 'Terminais Base', 'terminais_proporcional': 'Ativações'})
 
-# Editor de Dados
 edited_df = st.data_editor(
     df_to_edit,
     column_config={
-        "Cliente": st.column_config.TextColumn("Cliente", disabled=True),
-        "Faturamento (R$)": st.column_config.NumberColumn("Faturamento", format="R$ %.2f", disabled=True),
-        "Terminais Base": st.column_config.NumberColumn("Base", disabled=True),
-        "Novas Ativações/Prop.": st.column_config.NumberColumn("Ativações", disabled=True),
-        "Vendedor": st.column_config.TextColumn(
-            "Vendedor Responsável", 
-            help="Digite o nome do vendedor"
-        )
+        "Cliente": st.column_config.TextColumn(disabled=True),
+        "Faturamento (R$)": st.column_config.NumberColumn(format="R$ %.2f", disabled=True),
+        "Terminais Base": st.column_config.NumberColumn(disabled=True),
+        "Ativações": st.column_config.NumberColumn(disabled=True),
+        "Vendedor": st.column_config.TextColumn("Vendedor Responsável")
     },
-    use_container_width=True,
-    hide_index=True,
-    num_rows="fixed"
+    use_container_width=True, hide_index=True, num_rows="fixed"
 )
 
-# Botão para salvar os vendedores no banco
-col_btn1, col_btn2 = st.columns([1, 4])
-if col_btn1.button("💾 Salvar Vínculos de Vendedores", type="primary"):
-    # Atualiza o dicionário de mapeamento com os novos valores
-    new_mappings = dict(zip(edited_df['Cliente'], edited_df['Vendedor']))
-    # Remove entradas vazias
-    new_mappings = {k: v for k, v in new_mappings.items() if v and str(v).strip() != ""}
-    
-    # Salva no Firestore
-    if save_seller_mappings(new_mappings):
-        st.cache_data.clear() # Limpa cache se necessário
-        st.rerun()
+if st.button("💾 Salvar Vínculos", type="primary"):
+    new_mappings = {k: v for k, v in dict(zip(edited_df['Cliente'], edited_df['Vendedor'])).items() if v and str(v).strip() != ""}
+    if save_seller_mappings(new_mappings): st.cache_data.clear(); st.rerun()
 
-# --- 4. CÁLCULO E RELATÓRIO FINAL ---
-st.markdown("---")
-st.subheader("📊 Relatório de Comissões Calculado")
+# --- 4. CÁLCULO DA COMISSÃO (LÓGICA NOVA) ---
+st.markdown("---"); st.subheader("📊 Relatório de Comissões Calculado")
 
-# Verifica se a coluna tem dados válidos (não vazios)
-tem_vendedores = edited_df['Vendedor'].str.strip().astype(bool).any()
-
-if not tem_vendedores:
-    st.info("👆 Por favor, preencha a coluna 'Vendedor Responsável' na tabela acima e clique em Salvar para ver os cálculos.")
+if not edited_df['Vendedor'].str.strip().astype(bool).any():
+    st.info("👆 Preencha a coluna 'Vendedor Responsável' acima e salve para ver os cálculos.")
 else:
-    # Lógica de Cálculo
-    # 1. Comissão por % (Recorrência)
-    edited_df['Comissão Recorrência'] = edited_df.apply(
-        lambda x: (x['Faturamento (R$)'] * (comissao_percentual / 100.0)) if x['Faturamento (R$)'] >= meta_minima else 0.0,
-        axis=1
-    )
-    
-    # 2. Bônus por Ativação (Baseado em terminais proporcionais como proxy de ativação)
-    edited_df['Bônus Ativação'] = edited_df['Novas Ativações/Prop.'] * bonus_ativacao
-    
-    # 3. Total
-    edited_df['Premiação Total'] = edited_df['Comissão Recorrência'] + edited_df['Bônus Ativação']
-    
-    # Remove linhas sem vendedor para o resumo
-    df_calculado = edited_df[edited_df['Vendedor'].str.strip() != ""].copy()
-
-    if not df_calculado.empty:
-        # Agrupamento por Vendedor
-        resumo_vendedor = df_calculado.groupby('Vendedor').agg({
-            'Cliente': 'count',
-            'Faturamento (R$)': 'sum',
-            'Novas Ativações/Prop.': 'sum',
-            'Comissão Recorrência': 'sum',
-            'Bônus Ativação': 'sum',
-            'Premiação Total': 'sum'
-        }).reset_index()
-
-        resumo_vendedor = resumo_vendedor.rename(columns={'Cliente': 'Qtd Clientes', 'Novas Ativações/Prop.': 'Qtd Ativações'})
-
-        # Exibição dos Cards de Totais
-        total_pagar = resumo_vendedor['Premiação Total'].sum()
-        total_faturado_vendedores = resumo_vendedor['Faturamento (R$)'].sum()
+    # Função para determinar a % de comissão baseada na regra
+    def get_tier_percentage(billed_price, base_price):
+        if base_price <= 0 or billed_price <= 0: return 0.0
         
+        ratio = billed_price / base_price
+        
+        if 0.80 <= ratio <= 0.99: return 0.02  # 2%
+        if 1.00 <= ratio <= 1.19: return 0.15  # 15%
+        if ratio >= 1.20: return 0.30          # 30%
+        return 0.0                             # < 80%
+
+    # Aplicar cálculo linha a linha
+    commissions = []
+    
+    # Mapear dados originais de volta para o edited_df
+    # Precisamos dos dados detalhados (gprs/satelite) que não estão no edited_df visual, mas estão no df_filtered
+    # Vamos iterar sobre o df_filtered e usar o Vendedor do edited_df
+    
+    # Criar mapa de cliente -> vendedor atualizado
+    current_seller_map = dict(zip(edited_df['Cliente'], edited_df['Vendedor']))
+    
+    results = []
+    
+    for idx, row in df_filtered.iterrows():
+        client = row['cliente']
+        seller = current_seller_map.get(client, "")
+        
+        if not seller or not str(seller).strip():
+            continue
+            
+        total_invoice = row['valor_total']
+        
+        # Se faturamento menor que meta, comissão é zero
+        if total_invoice < meta_minima:
+            results.append({'Vendedor': seller, 'Cliente': client, 'Faturamento': total_invoice, 'Comissao': 0.0, 'Bonus': 0.0})
+            continue
+
+        # Dados GPRS
+        count_gprs = row['terminais_gprs']
+        price_gprs_billed = row['valor_unitario_gprs']
+        base_gprs = base_prices['GPRS']
+        
+        # Dados Satélite
+        count_sat = row['terminais_satelitais']
+        price_sat_billed = row['valor_unitario_satelital']
+        base_sat = base_prices['SATELITE']
+        
+        # Calcular Receita Teórica de cada parte para rateio do Valor Total Real
+        # (O valor total pode incluir pró-rata, descontos, etc, então ponderamos pelo peso teórico)
+        weight_gprs = count_gprs * price_gprs_billed
+        weight_sat = count_sat * price_sat_billed
+        total_weight = weight_gprs + weight_sat
+        
+        comm_gprs = 0.0
+        comm_sat = 0.0
+        
+        if total_weight > 0:
+            # Rateio do valor total da nota
+            revenue_gprs_real = total_invoice * (weight_gprs / total_weight)
+            revenue_sat_real = total_invoice * (weight_sat / total_weight)
+            
+            # Taxas
+            rate_gprs = get_tier_percentage(price_gprs_billed, base_gprs)
+            rate_sat = get_tier_percentage(price_sat_billed, base_sat)
+            
+            comm_gprs = revenue_gprs_real * rate_gprs
+            comm_sat = revenue_sat_real * rate_sat
+        
+        total_comm = comm_gprs + comm_sat
+        
+        # Bônus Ativação
+        bonus = row['terminais_proporcional'] * bonus_ativacao
+        
+        results.append({
+            'Vendedor': seller,
+            'Cliente': client,
+            'Faturamento': total_invoice,
+            'Comissao': total_comm,
+            'Bonus': bonus,
+            'Total Pagar': total_comm + bonus
+        })
+
+    df_results = pd.DataFrame(results)
+
+    if not df_results.empty:
+        # Agrupamento
+        resumo = df_results.groupby('Vendedor').agg({
+            'Cliente': 'count',
+            'Faturamento': 'sum',
+            'Comissao': 'sum',
+            'Bonus': 'sum',
+            'Total Pagar': 'sum'
+        }).reset_index().rename(columns={'Cliente': 'Qtd Clientes'})
+
+        # Cards
         c1, c2, c3 = st.columns(3)
-        c1.metric("Total de Comissões a Pagar", f"R$ {total_pagar:,.2f}")
-        c2.metric("Faturamento Base (Comissionado)", f"R$ {total_faturado_vendedores:,.2f}")
-        c3.metric("Total de Ativações Bonificadas", int(resumo_vendedor['Qtd Ativações'].sum()))
+        c1.metric("Total a Pagar", f"R$ {resumo['Total Pagar'].sum():,.2f}")
+        c2.metric("Comissões (Recorrência)", f"R$ {resumo['Comissao'].sum():,.2f}")
+        c3.metric("Bônus (Ativação)", f"R$ {resumo['Bonus'].sum():,.2f}")
 
         st.markdown("### Resumo por Vendedor")
         st.dataframe(
-            resumo_vendedor,
-            use_container_width=True,
-            hide_index=True,
+            resumo, use_container_width=True, hide_index=True,
             column_config={
-                "Faturamento (R$)": st.column_config.NumberColumn(format="R$ %.2f"),
-                "Comissão Recorrência": st.column_config.NumberColumn(format="R$ %.2f"),
-                "Bônus Ativação": st.column_config.NumberColumn(format="R$ %.2f"),
-                "Premiação Total": st.column_config.NumberColumn(format="R$ %.2f"),
+                "Faturamento": st.column_config.NumberColumn(format="R$ %.2f"),
+                "Comissao": st.column_config.NumberColumn(format="R$ %.2f"),
+                "Bonus": st.column_config.NumberColumn(format="R$ %.2f"),
+                "Total Pagar": st.column_config.NumberColumn(format="R$ %.2f"),
             }
         )
 
-        # Botão de Exportação Excel
-        def to_excel_download(df_summary, df_detailed):
+        def to_excel(df1, df2):
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                df_summary.to_excel(writer, index=False, sheet_name='Resumo Vendedores')
-                df_detailed.to_excel(writer, index=False, sheet_name='Detalhado por Cliente')
+                df1.to_excel(writer, index=False, sheet_name='Resumo')
+                df2.to_excel(writer, index=False, sheet_name='Detalhado')
             return output.getvalue()
 
-        excel_data = to_excel_download(resumo_vendedor, df_calculado)
-        
         st.download_button(
-            label="📥 Baixar Relatório de Comissões (Excel)",
-            data=excel_data,
-            file_name=f"Comissoes_Verdio_{periodo_selecionado}.xlsx",
+            "📥 Baixar Relatório (Excel)",
+            data=to_excel(resumo, df_results),
+            file_name=f"Comissoes_{periodo_selecionado}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
         
-        with st.expander("Ver Detalhamento Completo (Lista de Clientes)"):
-            st.dataframe(df_calculado, use_container_width=True, hide_index=True)
-            
+        with st.expander("Ver Detalhamento dos Cálculos"):
+            st.dataframe(df_results, use_container_width=True)
     else:
-        st.warning("Nenhum vendedor atribuído neste período.")
+        st.warning("Nenhum cálculo gerado (verifique se há vendedores atribuídos).")
