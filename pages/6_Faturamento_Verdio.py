@@ -30,7 +30,6 @@ class PDF(FPDF):
 def processar_planilha_faturamento(file_bytes, tracker_inventory, prices):
     try:
         meses_pt = {"January": "Janeiro", "February": "Fevereiro", "March": "Março", "April": "Abril", "May": "Maio", "June": "Junho", "July": "Julho", "August": "Agosto", "September": "Setembro", "October": "Outubro", "November": "Novembro", "December": "Dezembro"}
-        
         try:
             periodo_df = pd.read_excel(io.BytesIO(file_bytes), header=None, sheet_name=0)
             periodo_str = periodo_df.iloc[8, 8]
@@ -98,7 +97,6 @@ def create_pdf_report(nome_cliente, periodo, totais, dfs):
     pdf.set_font("Arial", "B", 16); pdf.cell(0, 10, "Resumo do Faturamento", 0, 1, "C"); pdf.ln(5)
     pdf.set_font("Arial", "", 12); pdf.cell(0, 8, f"Cliente: {nome_cliente}", 0, 1, "L"); pdf.cell(0, 8, f"Período: {periodo}", 0, 1, "L"); pdf.ln(5)
     
-    # Totais
     w = pdf.w - pdf.l_margin - pdf.r_margin
     col = w / 5
     pdf.set_font("Arial", "B", 9)
@@ -149,7 +147,6 @@ def create_pdf_report(nome_cliente, periodo, totais, dfs):
             pdf.ln()
         pdf.ln(5)
 
-    # Definição das tabelas
     w_cheio = {'Terminal': 38, 'Nº Equipamento': 38, 'Placa': 25, 'Modelo': 34, 'Tipo': 20, 'Valor a Faturar': 35}
     draw_table("Detalhamento Cheio", dfs['cheio'], w_cheio)
     
