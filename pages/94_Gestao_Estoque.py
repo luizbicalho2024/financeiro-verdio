@@ -41,6 +41,16 @@ with st.expander("Gerenciar Tabelas de Preços por Tipo de Equipamento", expande
     # Preparar dados para o Data Editor
     table_data = []
     for tipo, precos in tipo_equip_data.items():
+        # --- CORREÇÃO DE BUG (Compatibilidade) ---
+        # Se vier um número solto (cache/banco antigo), converte para dict na hora
+        if isinstance(precos, (int, float)):
+            val = float(precos)
+            precos = {"price1": val, "price2": val, "price3": val}
+        # Se por algum motivo não for dict, cria um vazio para não quebrar o .get
+        elif not isinstance(precos, dict):
+            precos = {}
+        # -----------------------------------------
+
         row = {
             "Tipo Equipamento": tipo,
             "Preço 1 (R$)": precos.get("price1", 0.0),
@@ -139,11 +149,13 @@ else:
     for model, current_type in sorted(model_types.items()):
         with cols[col_index]:
             try:
+                # Garante que o tipo atual esteja na lista, mesmo que seja inválido
                 if current_type not in tipos_disponiveis:
                     tipos_disponiveis.append(current_type)
+                
                 default_index = tipos_disponiveis.index(current_type)
             except ValueError:
-                default_index = 0
+                default_index = 0 # Padrão para o primeiro item se o tipo atual não for encontrado
 
             new_type = st.selectbox(f"Modelo: **{model}**", options=tipos_disponiveis, index=default_index, key=f"model_{model}")
             
