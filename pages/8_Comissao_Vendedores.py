@@ -104,6 +104,16 @@ if not history_data:
 seller_map = get_seller_mappings()
 
 df = pd.DataFrame(history_data)
+
+# --- CORREÇÃO DE TIPOS DE DADOS (CRUCIAL PARA O DATA_EDITOR) ---
+# Garante que as colunas numéricas sejam float/int e preenche nulos com 0
+if 'valor_total' in df.columns:
+    df['valor_total'] = pd.to_numeric(df['valor_total'], errors='coerce').fillna(0.0)
+if 'terminais_cheio' in df.columns:
+    df['terminais_cheio'] = pd.to_numeric(df['terminais_cheio'], errors='coerce').fillna(0).astype(int)
+if 'terminais_proporcional' in df.columns:
+    df['terminais_proporcional'] = pd.to_numeric(df['terminais_proporcional'], errors='coerce').fillna(0).astype(int)
+
 df['data_geracao'] = pd.to_datetime(df['data_geracao'])
 df['mes_ano'] = df['data_geracao'].dt.to_period('M').astype(str)
 
@@ -122,8 +132,8 @@ with col_filt1:
 df_filtered = df[df['mes_ano'] == periodo_selecionado].copy()
 
 # Adiciona coluna de Vendedor baseada no mapeamento salvo
-# Se não houver vendedor salvo, deixa em branco (None)
-df_filtered['Vendedor'] = df_filtered['cliente'].map(seller_map)
+# CORREÇÃO: fillna("") e astype(str) garantem que a coluna seja compatível com TextColumn
+df_filtered['Vendedor'] = df_filtered['cliente'].map(seller_map).fillna("").astype(str)
 
 # --- 3. EDITOR DE VENDEDORES ---
 st.subheader(f"Vínculo de Vendedores - {periodo_selecionado}")
@@ -138,7 +148,7 @@ df_to_edit = df_to_edit.rename(columns={
     'terminais_proporcional': 'Novas Ativações/Prop.',
 })
 
-# Editor de Dados (CORRIGIDO: REMOVIDO 'placeholder')
+# Editor de Dados
 edited_df = st.data_editor(
     df_to_edit,
     column_config={
@@ -173,7 +183,10 @@ if col_btn1.button("💾 Salvar Vínculos de Vendedores", type="primary"):
 st.markdown("---")
 st.subheader("📊 Relatório de Comissões Calculado")
 
-if edited_df['Vendedor'].isna().all() or (edited_df['Vendedor'] == "").all():
+# Verifica se a coluna tem dados válidos (não vazios)
+tem_vendedores = edited_df['Vendedor'].str.strip().astype(bool).any()
+
+if not tem_vendedores:
     st.info("👆 Por favor, preencha a coluna 'Vendedor Responsável' na tabela acima e clique em Salvar para ver os cálculos.")
 else:
     # Lógica de Cálculo
@@ -190,8 +203,7 @@ else:
     edited_df['Premiação Total'] = edited_df['Comissão Recorrência'] + edited_df['Bônus Ativação']
     
     # Remove linhas sem vendedor para o resumo
-    df_calculado = edited_df.dropna(subset=['Vendedor'])
-    df_calculado = df_calculado[df_calculado['Vendedor'] != ""]
+    df_calculado = edited_df[edited_df['Vendedor'].str.strip() != ""].copy()
 
     if not df_calculado.empty:
         # Agrupamento por Vendedor
