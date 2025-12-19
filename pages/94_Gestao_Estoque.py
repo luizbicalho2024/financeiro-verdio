@@ -9,7 +9,6 @@ import auth_functions as af
 
 st.set_page_config(layout="wide", page_title="Estoque", page_icon="📦")
 
-# Verificação de Segurança
 if "user_info" not in st.session_state:
     st.error("🔒 Login necessário.")
     if st.button("Ir para Login"): st.switch_page("1_Home.py")
@@ -53,6 +52,7 @@ with tab1:
             mask = df_show.apply(lambda x: x.astype(str).str.contains(search, case=False).any(), axis=1)
             df_show = df_show[mask]
         
+        # Corrigido: width='stretch' para dataframe ocupar largura
         st.dataframe(df_show, use_container_width=True, hide_index=True)
     else:
         st.info("O estoque está vazio. Vá na aba 'Importação' para carregar dados.")
@@ -113,7 +113,6 @@ with tab3:
             try:
                 df_up = pd.read_excel(uploaded_file, header=11, dtype=str)
                 
-                # Ajuste de nomes de colunas comuns
                 if 'Nº Equipamento' not in df_up.columns and 'Nº Série' in df_up.columns:
                     df_up.rename(columns={'Nº Série': 'Nº Equipamento'}, inplace=True)
                 
@@ -141,7 +140,6 @@ with tab3:
             
             for model, curr in sorted(model_types.items()):
                 opts = ["GPRS", "SATELITE", "CAMERA", "RADIO"]
-                # Garante que o valor atual esteja na lista
                 if curr not in opts: opts.append(curr)
                 
                 new = st.selectbox(f"Modelo: {model}", opts, index=opts.index(curr), key=f"m_{model}")
