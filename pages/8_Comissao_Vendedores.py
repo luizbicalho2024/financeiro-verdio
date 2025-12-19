@@ -112,7 +112,11 @@ st.markdown("---")
 col_filt1, col_filt2 = st.columns([1, 3])
 with col_filt1:
     periodos_disponiveis = sorted(df['mes_ano'].unique(), reverse=True)
-    periodo_selecionado = st.selectbox("Selecione o Mês de Competência:", periodos_disponiveis)
+    if periodos_disponiveis:
+        periodo_selecionado = st.selectbox("Selecione o Mês de Competência:", periodos_disponiveis)
+    else:
+        st.warning("Nenhum período disponível.")
+        st.stop()
 
 # Filtra dados pelo mês
 df_filtered = df[df['mes_ano'] == periodo_selecionado].copy()
@@ -134,7 +138,7 @@ df_to_edit = df_to_edit.rename(columns={
     'terminais_proporcional': 'Novas Ativações/Prop.',
 })
 
-# Editor de Dados
+# Editor de Dados (CORRIGIDO: REMOVIDO 'placeholder')
 edited_df = st.data_editor(
     df_to_edit,
     column_config={
@@ -144,8 +148,7 @@ edited_df = st.data_editor(
         "Novas Ativações/Prop.": st.column_config.NumberColumn("Ativações", disabled=True),
         "Vendedor": st.column_config.TextColumn(
             "Vendedor Responsável", 
-            help="Digite o nome do vendedor",
-            placeholder="Ex: João Silva"
+            help="Digite o nome do vendedor"
         )
     },
     use_container_width=True,
