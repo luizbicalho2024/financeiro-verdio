@@ -1,42 +1,64 @@
 import streamlit as st
-from firebase_config import auth
+import requests
 import time
+
+# --- CONFIGURAÇÃO OBRIGATÓRIA ---
+# Substitua pela sua Chave de API da Web (Firebase Console > Configurações do Projeto > Geral)
+# Se estiver usando st.secrets, pode deixar: st.secrets["FIREBASE_WEB_API_KEY"]
+FIREBASE_WEB_API_KEY = "SUA_WEB_API_KEY_AQUI" 
 
 def login_user(email, password):
     """
-    Autentica o usuário no Firebase Auth.
-    Retorna (user_obj, None) se sucesso, ou (None, error_message) se falha.
+    Realiza login usando a API REST do Google Identity Toolkit.
     """
+    # Verifica se a chave foi configurada
+    if FIREBASE_WEB_API_KEY == "SUA_WEB_API_KEY_AQUI":
+        return None, "Erro de Configuração: WEB API KEY não definida no arquivo auth_functions.py"
+
+    url = f"https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key={FIREBASE_WEB_API_KEY}"
+    payload = {"email": email, "password": password, "returnSecureToken": True}
+    
     try:
-        user = auth.sign_in_with_email_and_password(email, password)
-        # Tenta obter info adicional para garantir que o token é válido
-        user_info = auth.get_account_info(user['idToken'])
-        return user, None
-    except Exception as e:
-        # Tenta limpar a mensagem de erro do Firebase para ficar legível
-        error_msg = str(e)
-        if "INVALID_LOGIN_CREDENTIALS" in error_msg or "INVALID_PASSWORD" in error_msg:
-            return None, "E-mail ou senha incorretos."
-        elif "EMAIL_NOT_FOUND" in error_msg:
-            return None, "Usuário não cadastrado."
-        elif "TOO_MANY_ATTEMPTS_TRY_LATER" in error_msg:
-            return None, "Muitas tentativas falhas. Aguarde um momento."
+        r = requests.post(url, json=payload)
+        data = r.json()
+        
+        if r.status_code == 200:
+            return data, None
         else:
-            return None, f"Erro inesperado: {error_msg}"
+            error_msg = data.get('error', {}).get('message', 'Erro desconhecido')
+            if "INVALID_LOGIN_CREDENTIALS" in error_msg or "INVALID_PASSWORD" in error_msg:
+                return None, "E-mail ou senha incorretos."
+            elif "EMAIL_NOT_FOUND" in error_msg:
+                return None, "Usuário não encontrado."
+            elif "TOO_MANY_ATTEMPTS" in error_msg:
+                return None, "Muitas tentativas. Aguarde."
+            return None, f"Erro: {error_msg}"
+            
+    except Exception as e:
+        return None, f"Erro de conexão: {str(e)}"
 
 def reset_password(email):
-    """Envia e-mail de redefinição de senha."""
+    """Envia e-mail de redefinição via API REST."""
+    if FIREBASE_WEB_API_KEY == "SUA_WEB_API_KEY_AQUI":
+        return False, "API Key não configurada."
+
+    url = f"https://identitytoolkit.googleapis.com/v1/accounts:sendOobCode?key={FIREBASE_WEB_API_KEY}"
+    payload = {"requestType": "PASSWORD_RESET", "email": email}
+    
     try:
-        auth.send_password_reset_email(email)
-        return True, None
+        r = requests.post(url, json=payload)
+        if r.status_code == 200:
+            return True, None
+        else:
+            return False, r.json().get('error', {}).get('message', 'Erro desconhecido')
     except Exception as e:
         return False, str(e)
 
 def render_sidebar():
-    """Renderiza a sidebar padrão para todas as páginas internas."""
+    """Renderiza a sidebar padrão."""
     with st.sidebar:
         try:
-            # Correção do warning: removido use_container_width para st.image na sidebar
+            # Correção do aviso use_container_width
             st.image("imgs/v-c.png", width=140)
         except:
             st.header("Verdio")
@@ -54,7 +76,6 @@ def render_sidebar():
             """, unsafe_allow_html=True)
             
             st.markdown("---")
-            # Correção do warning: substituindo use_container_width por help ou removendo se padrão
             if st.button("🚪 Sair do Sistema"):
                 for key in list(st.session_state.keys()):
                     del st.session_state[key]
