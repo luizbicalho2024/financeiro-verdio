@@ -1,191 +1,317 @@
+# pages/8_Comissao_Vendedores.py
 import sys
 import os
 import io
 import pandas as pd
 import streamlit as st
+from datetime import datetime
 
+# Adiciona diretório pai
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 import user_management_db as umdb
-import auth_functions as af
 from firebase_config import db
 
-st.set_page_config(layout="wide", page_title="Comissões", page_icon="💰")
+# --- CONFIGURAÇÃO DA PÁGINA ---
+st.set_page_config(layout="wide", page_title="Comissões Detalhadas", page_icon="💰")
 
-if "user_info" not in st.session_state: st.stop()
-if st.session_state.get("role", "Usuário").lower() != "admin": st.error("Restrito."); st.stop()
+# --- AUTH ---
+if "user_info" not in st.session_state: st.error("🔒 Login necessário."); st.stop()
+if st.session_state.get("role", "Usuário").lower() != "admin": st.error("🚫 Acesso restrito."); st.stop()
 
-af.render_sidebar()
-st.title("💰 Apuração de Comissões")
+# --- SIDEBAR ---
+st.sidebar.image("imgs/v-c.png", width=120)
+st.sidebar.title(f"Olá, {st.session_state.get('name', 'N/A')}!")
+st.sidebar.markdown("---")
+if st.sidebar.button("Logout"):
+    for k in list(st.session_state.keys()): del st.session_state[k]
+    st.switch_page("1_Home.py")
 
-# --- FUNÇÕES LOCAIS ---
-def get_settings():
+# --- FUNÇÕES AUXILIARES ---
+def get_seller_mappings():
     try:
-        return db.collection("settings").document("commission_rules").get().to_dict() or {}
+        doc = db.collection("settings").document("seller_mappings").get()
+        return doc.to_dict() if doc.exists else {}
     except: return {}
 
-def save_settings(data):
+def save_seller_mappings(mapping_data):
+    try:
+        db.collection("settings").document("seller_mappings").set(mapping_data, merge=True)
+        st.toast("Vendedores salvos!", icon="✅")
+        return True
+    except: return False
+
+def get_commission_settings():
+    try:
+        doc = db.collection("settings").document("commission_rules").get()
+        return doc.to_dict() if doc.exists else {"bonus_ativacao": 50.00, "base_price_table": "price3"}
+    except: return {"bonus_ativacao": 50.00, "base_price_table": "price3"}
+
+def save_commission_settings(data):
     try:
         db.collection("settings").document("commission_rules").set(data, merge=True)
+        st.toast("Configurações salvas!", icon="✅")
         return True
     except: return False
 
-def get_seller_map():
-    try:
-        return db.collection("settings").document("seller_mappings").get().to_dict() or {}
-    except: return {}
+# --- TÍTULO ---
+st.title("💰 Apuração de Comissões (Analítica)")
+st.markdown("Cálculo detalhado terminal a terminal comparando Faturamento vs. Tabela de Preço.")
 
-def save_seller_map(data):
-    try:
-        db.collection("settings").document("seller_mappings").set(data, merge=True)
-        return True
-    except: return False
+# --- 1. CONFIGURAÇÕES E REGRAS ---
+comm_rules = get_commission_settings()
+pricing_config = umdb.get_pricing_config().get("TIPO_EQUIPAMENTO", {})
 
-# --- CONFIGURAÇÃO ---
-settings = get_settings()
-pricing = umdb.get_pricing_config().get("TIPO_EQUIPAMENTO", {})
+# Mapeamento para interface amigável
+price_options = {"price1": "Preço 1 (Mínimo)", "price2": "Preço 2 (Médio)", "price3": "Preço 3 (Padrão)"}
+reverse_price_options = {v: k for k, v in price_options.items()}
 
-price_opts = {"price1": "Preço 1 (Mínimo)", "price2": "Preço 2 (Médio)", "price3": "Preço 3 (Padrão)"}
-rev_price = {v: k for k, v in price_opts.items()}
-
-def get_base_price(etype, table_key):
-    etype = str(etype).strip().upper()
-    p_data = pricing.get(etype)
-    if not p_data:
-        if "SAT" in etype: p_data = pricing.get("SATELITE", {})
-        else: p_data = pricing.get("GPRS", {})
+# Função para extrair o Preço Base dinâmico
+def get_base_price_stock(equip_type, price_key='price3'):
+    etype = str(equip_type).strip().upper()
+    data = pricing_config.get(etype, None)
     
-    if isinstance(p_data, dict): return float(p_data.get(table_key, 0.0))
-    if isinstance(p_data, (float, int)): return float(p_data)
+    # Fallback se não encontrar o tipo exato
+    if data is None:
+        if "SAT" in etype: data = pricing_config.get("SATELITE", {})
+        else: data = pricing_config.get("GPRS", {}) 
+    
+    # Retorna o preço da tabela selecionada (1, 2 ou 3)
+    if isinstance(data, dict): return float(data.get(price_key, 0.0))
+    if isinstance(data, (float, int)): return float(data) # Compatibilidade antiga
     return 0.0
 
-# --- UI ABAS ---
-tab_resumo, tab_analitico, tab_config = st.tabs(["📊 Resumo", "🔎 Analítico (Item a Item)", "⚙️ Configurações"])
-
-with tab_config:
-    c1, c2 = st.columns(2)
+with st.expander("⚙️ Parâmetros de Cálculo", expanded=False):
+    c1, c2, c3 = st.columns([1.5, 1, 1])
+    
     with c1:
-        cur_tbl = settings.get("base_price_table", "price3")
-        sel_lbl = st.selectbox("Tabela Base (100%)", list(price_opts.values()), index=list(price_opts.keys()).index(cur_tbl))
-        sel_key = rev_price[sel_lbl]
-        
-        bonus_val = st.number_input("Bônus Ativação (R$)", value=float(settings.get("bonus_ativacao", 50.0)), step=10.0)
-        
-        if st.button("Salvar Regras"):
-            save_settings({"base_price_table": sel_key, "bonus_ativacao": bonus_val})
-            st.toast("Salvo!", icon="✅"); st.rerun()
-            
+        st.markdown("""
+        **Regra de Faixa (Valor Cobrado / Valor Base):**
+        - < 80%: **0%** de comissão.
+        - 80% a 99%: **2%** de comissão.
+        - 100% a 119%: **15%** de comissão.
+        - >= 120%: **30%** de comissão.
+        """)
+    
     with c2:
-        st.info(f"Regras Atuais:\n\nBase: **{price_opts.get(sel_key)}**\n\n< 80%: 0% | 80-99%: 2% | 100-119%: 15% | > 120%: 30%")
+        # Seletor da Tabela Base (Padrão Preço 3)
+        current_table_key = comm_rules.get("base_price_table", "price3")
+        current_table_label = price_options.get(current_table_key, "Preço 3 (Padrão)")
+        
+        selected_table_label = st.selectbox(
+            "Tabela Base para Cálculo (100%)",
+            options=list(price_options.values()),
+            index=list(price_options.values()).index(current_table_label),
+            help="Define qual preço do estoque será usado como denominador para calcular a % atingida."
+        )
+        selected_table_key = reverse_price_options[selected_table_label]
 
-# --- CARGA E FILTRO ---
-hist = umdb.get_billing_history()
-if not hist: st.warning("Sem dados."); st.stop()
+    with c3:
+        bonus_input = st.number_input("Bônus por Ativação (R$)", value=float(comm_rules.get("bonus_ativacao", 50.0)), step=10.0)
+        
+        st.write("") # Espaçamento
+        if st.button("💾 Salvar Parâmetros"):
+            save_commission_settings({
+                "bonus_ativacao": bonus_input,
+                "base_price_table": selected_table_key
+            })
+            st.rerun()
 
-df = pd.DataFrame(hist)
-if 'data_geracao' in df.columns:
-    df['data_geracao'] = pd.to_datetime(df['data_geracao']).dt.tz_localize(None)
-    df['mes'] = df['data_geracao'].dt.to_period('M').astype(str)
+# --- 2. DADOS E FILTROS ---
+history = umdb.get_billing_history()
+if not history: st.warning("Sem histórico de faturamento."); st.stop()
 
-periodos = sorted(df['mes'].unique(), reverse=True)
-sel_per = st.sidebar.selectbox("Mês Competência:", periodos)
+df_hist = pd.DataFrame(history)
 
-# Deduplicação: Mais recente primeiro, drop duplicates por cliente
-df_m = df[df['mes'] == sel_per].copy().sort_values('data_geracao', ascending=False).drop_duplicates('cliente', keep='first')
+# Tratamento de Datas
+if 'data_geracao' in df_hist.columns:
+    df_hist['data_geracao'] = pd.to_datetime(df_hist['data_geracao']).dt.tz_localize(None)
+    df_hist['mes_ano'] = df_hist['data_geracao'].dt.to_period('M').astype(str)
+else: st.error("Erro nos dados."); st.stop()
 
-# Vínculo Vendedores
-s_map = get_seller_map()
-s_map_norm = {str(k).strip(): str(v).strip() for k, v in s_map.items()}
-df_m['cli_norm'] = df_m['cliente'].astype(str).str.strip()
-df_m['Vendedor'] = df_m['cli_norm'].map(s_map_norm).fillna("")
+# Filtro de Mês
+st.markdown("---")
+periodos = sorted(df_hist['mes_ano'].unique(), reverse=True)
+sel_periodo = st.selectbox("Selecione o Mês de Competência:", periodos)
 
-with st.expander("Atribuir Vendedores", expanded=True):
-    # Corrigido warning
-    edited = st.data_editor(df_m[['cliente', 'valor_total', 'Vendedor']], key="editor", hide_index=True, use_container_width=True)
-    if st.button("Salvar Vínculos"):
-        new_map = {str(r['cliente']).strip(): str(r['Vendedor']).strip() for _, r in edited.iterrows() if str(r['Vendedor']).strip()}
-        s_map.update(new_map)
-        save_seller_map(s_map); st.rerun()
+# --- 3. DEDUPLICAÇÃO E VÍNCULO ---
+df_month = df_hist[df_hist['mes_ano'] == sel_periodo].copy()
+df_month = df_month.sort_values('data_geracao', ascending=False).drop_duplicates(subset=['cliente'], keep='first')
 
-# --- CÁLCULO ---
-temp_map = {str(r['cliente']).strip(): str(r['Vendedor']).strip() for _, r in edited.iterrows()}
-resumo, analitico = [], []
+seller_map = get_seller_mappings()
+seller_map_norm = {str(k).strip(): str(v).strip() for k, v in seller_map.items()}
 
-def get_tier(billed, base):
+df_month['cliente_norm'] = df_month['cliente'].astype(str).str.strip()
+df_month['Vendedor'] = df_month['cliente_norm'].map(seller_map_norm).fillna("")
+
+# Editor de Vínculo
+st.subheader("1. Vínculo de Vendedores")
+with st.expander("Clique para atribuir vendedores aos clientes", expanded=True):
+    df_edit = df_month[['cliente', 'valor_total', 'Vendedor']].copy()
+    df_edit.columns = ['Cliente', 'Total Nota (R$)', 'Vendedor']
+    
+    edited = st.data_editor(
+        df_edit,
+        column_config={
+            "Cliente": st.column_config.TextColumn(disabled=True),
+            "Total Nota (R$)": st.column_config.NumberColumn(format="R$ %.2f", disabled=True),
+            "Vendedor": st.column_config.TextColumn("Nome do Vendedor")
+        },
+        hide_index=True, use_container_width=True, num_rows="fixed"
+    )
+    
+    if st.button("💾 Salvar Vínculos"):
+        new_map = {str(r['Cliente']).strip(): str(r['Vendedor']).strip() for _, r in edited.iterrows() if str(r['Vendedor']).strip()}
+        full_map = seller_map.copy()
+        full_map.update(new_map)
+        if save_seller_mappings(full_map): st.rerun()
+
+# --- 4. MOTOR DE CÁLCULO DETALHADO ---
+st.markdown("---")
+st.subheader("2. Relatório de Comissões")
+st.caption(f"Base de Cálculo utilizada: **{price_options.get(selected_table_key)}**")
+
+temp_map = {str(r['Cliente']).strip(): str(r['Vendedor']).strip() for _, r in edited.iterrows()}
+summary_rows = []
+detailed_rows = []
+
+def get_tier_percent(billed, base):
     if base <= 0: return 0.0
-    r = billed / base
-    if r < 0.8: return 0.0
-    if r < 1.0: return 0.02
-    if r < 1.2: return 0.15
-    return 0.30
+    ratio = billed / base
+    if ratio < 0.80: return 0.0
+    if ratio <= 0.99: return 0.02
+    if ratio <= 1.19: return 0.15
+    return 0.30  # >= 1.20
 
-for _, row in df_m.iterrows():
-    cli = str(row['cliente']).strip()
-    vend = temp_map.get(cli, "")
-    if not vend: continue
+for _, row in df_month.iterrows():
+    client = str(row['cliente']).strip()
+    seller = temp_map.get(client, "")
+    
+    if not seller: continue
     
     details = row.get('itens_detalhados', [])
-    comm_total = 0.0
+    client_comm_total = 0.0
+    client_bonus_total = 0.0
     
-    if details:
-        for it in details:
-            if it.get('Categoria') == 'Suspenso': continue
-            term = it.get('Terminal') or 'N/A'
-            typ = it.get('Tipo', 'GPRS')
-            billed = float(it.get('Valor a Faturar', 0.0))
-            base = get_base_price(typ, sel_key)
-            pct = get_tier(billed, base)
-            val = billed * pct
-            comm_total += val
+    if details and isinstance(details, list) and len(details) > 0:
+        for item in details:
+            cat = item.get('Categoria', '')
+            if cat == 'Suspenso': continue
             
-            # Corrigido % visual
-            analitico.append({"Vendedor": vend, "Cliente": cli, "Terminal": term, "Tipo": typ, "Faturado": billed, "Base": base, "%": pct*100, "Comissão": val})
-    else:
-        # Fallback
-        billed = float(row.get('valor_total', 0))
-        base = get_base_price("GPRS", sel_key)
-        val = billed * 0.02
-        comm_total = val
-        analitico.append({"Vendedor": vend, "Cliente": cli, "Terminal": "RESUMO", "Tipo": "-", "Faturado": billed, "Base": base, "%": 2.0, "Comissão": val})
+            term_id = item.get('Terminal') or item.get('Nº Equipamento') or 'N/A'
+            tipo = item.get('Tipo', 'GPRS')
+            val_faturado = float(item.get('Valor a Faturar', 0.0))
+            
+            # --- USO DA CHAVE DE PREÇO DINÂMICA (price1, price2 ou price3) ---
+            base_price = get_base_price_stock(tipo, selected_table_key)
+            
+            pct = get_tier_percent(val_faturado, base_price)
+            comm_val = val_faturado * pct
+            
+            client_comm_total += comm_val
+            
+            # CORREÇÃO: Multiplica pct por 100 para exibição correta (ex: 15.0 para 15%)
+            detailed_rows.append({
+                "Vendedor": seller,
+                "Cliente": client,
+                "Terminal": term_id,
+                "Tipo": tipo,
+                "Valor Faturado": val_faturado,
+                "Valor Base": base_price,
+                "% Aplicado": pct * 100, # Multiplicado por 100
+                "Comissão (R$)": comm_val
+            })
+            
+        qtd_ativacoes = float(row.get('terminais_proporcional', 0))
+        client_bonus_total = qtd_ativacoes * bonus_input
         
-    bonus = float(row.get('terminais_proporcional', 0)) * bonus_val
-    resumo.append({"Vendedor": vend, "Cliente": cli, "Faturamento": float(row.get('valor_total', 0)), "Comissão": comm_total, "Bônus": bonus, "Total": comm_total + bonus})
+    else:
+        # Fallback para dados antigos
+        val_total = float(row.get('valor_total', 0))
+        base_gprs = get_base_price_stock("GPRS", selected_table_key)
+        taxa_est = 0.02 
+        comm_val = val_total * taxa_est
+        
+        client_comm_total = comm_val
+        client_bonus_total = float(row.get('terminais_proporcional', 0)) * bonus_input
+        
+        detailed_rows.append({
+            "Vendedor": seller,
+            "Cliente": client,
+            "Terminal": "RESUMO (S/ DETALHE)",
+            "Tipo": "-",
+            "Valor Faturado": val_total,
+            "Valor Base": base_gprs,
+            "% Aplicado": taxa_est * 100, # Multiplicado por 100
+            "Comissão (R$)": comm_val
+        })
 
-# --- DISPLAY ---
-if not resumo: st.info("Sem dados."); st.stop()
+    summary_rows.append({
+        "Vendedor": seller,
+        "Cliente": client,
+        "Faturamento Total": float(row.get('valor_total', 0)),
+        "Comissão Recorrência": client_comm_total,
+        "Bônus Ativação": client_bonus_total,
+        "Total a Pagar": client_comm_total + client_bonus_total
+    })
 
-df_res = pd.DataFrame(resumo)
-df_ana = pd.DataFrame(analitico)
-
-with tab_resumo:
-    # KPI
-    k1, k2, k3 = st.columns(3)
-    k1.metric("Total Pagar", f"R$ {df_res['Total'].sum():,.2f}")
-    k2.metric("Comissões", f"R$ {df_res['Comissão'].sum():,.2f}")
-    k3.metric("Bônus", f"R$ {df_res['Bônus'].sum():,.2f}")
+# --- 5. VISUALIZAÇÃO ---
+if not summary_rows:
+    st.info("Nenhum dado calculado. Verifique se os vendedores estão atribuídos.")
+else:
+    df_summary = pd.DataFrame(summary_rows)
+    df_detailed = pd.DataFrame(detailed_rows)
     
-    # Grouped
-    df_grp = df_res.groupby("Vendedor").sum(numeric_only=True).reset_index()
+    st.markdown("### Totais Gerais")
+    k1, k2, k3 = st.columns(3)
+    total_geral = df_summary["Total a Pagar"].sum()
+    k1.metric("Total a Pagar (Geral)", f"R$ {total_geral:,.2f}")
+    k2.metric("Comissões", f"R$ {df_summary['Comissão Recorrência'].sum():,.2f}")
+    k3.metric("Bônus", f"R$ {df_summary['Bônus Ativação'].sum():,.2f}")
+    
+    st.markdown("### Resumo por Vendedor")
+    df_group = df_summary.groupby("Vendedor").agg({
+        "Cliente": "count",
+        "Faturamento Total": "sum",
+        "Comissão Recorrência": "sum",
+        "Bônus Ativação": "sum",
+        "Total a Pagar": "sum"
+    }).reset_index()
+    
     st.dataframe(
-        df_grp, 
-        hide_index=True, 
-        use_container_width=True, 
-        column_config={"Faturamento": st.column_config.NumberColumn(format="R$ %.2f"), "Comissão": st.column_config.NumberColumn(format="R$ %.2f"), "Bônus": st.column_config.NumberColumn(format="R$ %.2f"), "Total": st.column_config.NumberColumn(format="R$ %.2f")}
+        df_group,
+        column_config={
+            "Faturamento Total": st.column_config.NumberColumn(format="R$ %.2f"),
+            "Comissão Recorrência": st.column_config.NumberColumn(format="R$ %.2f"),
+            "Bônus Ativação": st.column_config.NumberColumn(format="R$ %.2f"),
+            "Total a Pagar": st.column_config.NumberColumn(format="R$ %.2f"),
+        },
+        hide_index=True, use_container_width=True
     )
-
-with tab_analitico:
+    
+    st.markdown(f"### 🔎 Relatório Analítico (Base: {price_options.get(selected_table_key)})")
     st.dataframe(
-        df_ana, 
-        hide_index=True, 
-        use_container_width=True, 
-        column_config={"Faturado": st.column_config.NumberColumn(format="R$ %.2f"), "Base": st.column_config.NumberColumn(format="R$ %.2f"), "%": st.column_config.NumberColumn(format="%.1f%%"), "Comissão": st.column_config.NumberColumn(format="R$ %.2f")}
+        df_detailed,
+        column_config={
+            "Valor Faturado": st.column_config.NumberColumn(format="R$ %.2f"),
+            "Valor Base": st.column_config.NumberColumn(format="R$ %.2f"),
+            "% Aplicado": st.column_config.NumberColumn(format="%.1f%%"), # Formatação com sufixo %
+            "Comissão (R$)": st.column_config.NumberColumn(format="R$ %.2f"),
+        },
+        hide_index=True, use_container_width=True
     )
-
-# Export
-def to_excel(r, a):
-    out = io.BytesIO()
-    with pd.ExcelWriter(out, engine='openpyxl') as w:
-        r.to_excel(w, index=False, sheet_name='Resumo')
-        a.to_excel(w, index=False, sheet_name='Analitico')
-    return out.getvalue()
-
-st.sidebar.download_button("📥 Baixar Relatório (Excel)", to_excel(df_grp, df_ana), f"Comissao_{sel_per}.xlsx")
+    
+    def to_excel_full(df_resumo, df_clientes, df_analitico):
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            df_resumo.to_excel(writer, index=False, sheet_name='Resumo Vendedor')
+            df_clientes.to_excel(writer, index=False, sheet_name='Por Cliente')
+            df_analitico.to_excel(writer, index=False, sheet_name='Analitico (Terminais)')
+        return output.getvalue()
+    
+    excel_file = to_excel_full(df_group, df_summary, df_detailed)
+    st.download_button(
+        label="📥 Baixar Relatório Completo (Excel)",
+        data=excel_file,
+        file_name=f"Comissoes_Detalhadas_{sel_periodo}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
