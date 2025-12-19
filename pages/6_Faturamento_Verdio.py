@@ -203,7 +203,6 @@ def create_pdf_report(nome_cliente, periodo, totais, df_cheio, df_ativados, df_d
     widths_cheio = {'Terminal': 38, 'Nº Equipamento': 38, 'Placa': 25, 'Modelo': 34, 'Tipo': 20, 'Valor a Faturar': 35}
     draw_table("Detalhamento do Faturamento Cheio", df_cheio, widths_cheio, list(widths_cheio.keys()), header_map)
     
-    # --- CORREÇÃO: Larguras ajustadas para as tabelas Proporcionais (Total = 185mm) ---
     widths_proporcional = {
         'Terminal': 19, 
         'Nº Equipamento': 20, 
@@ -239,7 +238,12 @@ if 'prices_to_apply' in st.session_state: del st.session_state['prices_to_apply'
 
 prices = {}
 for equip_type in sorted(pricing_config.keys()):
-    prices[equip_type] = st.sidebar.number_input(f"Preço {equip_type}", min_value=0.0, value=float(default_prices.get(equip_type, 0.0)), format="%.2f")
+    # CORREÇÃO: Extrair o Preço 1 do dicionário de preços para uso padrão
+    val = default_prices.get(equip_type, 0.0)
+    if isinstance(val, dict):
+        val = val.get("price1", 0.0)
+    
+    prices[equip_type] = st.sidebar.number_input(f"Preço {equip_type}", min_value=0.0, value=float(val), format="%.2f")
 
 # --- 5. UPLOAD DO FICHEIRO ---
 st.subheader("Carregamento do Relatório de Terminais")
@@ -263,9 +267,10 @@ if uploaded_file:
         last_billing = umdb.get_last_billing_for_client(nome_cliente)
         if last_billing:
             last_prices = {
-                "GPRS": last_billing.get("valor_unitario_gprs", prices["GPRS"]),
-                "SATELITE": last_billing.get("valor_unitario_satelital", prices["SATELITE"]),
+                "GPRS": last_billing.get("valor_unitario_gprs", prices.get("GPRS", 0)),
+                "SATELITE": last_billing.get("valor_unitario_satelital", prices.get("SATELITE", 0)),
             }
+            # Comparação simplificada (apenas alerta se houver diferença)
             if any(prices.get(k, 0) != v for k, v in last_prices.items()):
                 st.info(f"💡 Encontramos os valores utilizados no último faturamento para **{nome_cliente}**.")
                 cols = st.columns(len(last_prices) + 1)
