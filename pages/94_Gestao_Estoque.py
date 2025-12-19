@@ -1,4 +1,4 @@
-# pages/4_Gestao_Estoque.py
+# pages/94_Gestao_Estoque.py
 import sys
 import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -31,24 +31,53 @@ if st.sidebar.button("Logout"):
 st.title("📦 Gestão de Estoque e Preços")
 st.markdown("Atualize o estoque de rastreadores e gerencie os preços e tipos de equipamentos.")
 
-# --- SEÇÃO DE PREÇOS ---
-with st.expander("Gerenciar Preços por Tipo de Equipamento", expanded=True):
+# --- SEÇÃO DE PREÇOS (MELHORIA: 3 PREÇOS POR EQUIPAMENTO) ---
+with st.expander("Gerenciar Tabelas de Preços por Tipo de Equipamento", expanded=True):
+    st.info("Agora você pode definir até 3 faixas de preço para cada tipo de equipamento.")
+    
     pricing_config = umdb.get_pricing_config()
-    
-    if "TIPO_EQUIPAMENTO" not in pricing_config:
-        pricing_config["TIPO_EQUIPAMENTO"] = {}
+    tipo_equip_data = pricing_config.get("TIPO_EQUIPAMENTO", {})
 
-    col1, col2, col3, col4 = st.columns(4)
-    prices = {
-        "GPRS": col1.number_input("Preço GPRS", min_value=0.0, value=float(pricing_config["TIPO_EQUIPAMENTO"].get("GPRS", 59.90)), format="%.2f"),
-        "SATELITE": col2.number_input("Preço SATÉLITE", min_value=0.0, value=float(pricing_config["TIPO_EQUIPAMENTO"].get("SATELITE", 159.90)), format="%.2f"),
-        "CAMERA": col3.number_input("Preço CÂMERA", min_value=0.0, value=float(pricing_config["TIPO_EQUIPAMENTO"].get("CAMERA", 0.0)), format="%.2f"),
-        "RADIO": col4.number_input("Preço RÁDIO", min_value=0.0, value=float(pricing_config["TIPO_EQUIPAMENTO"].get("RADIO", 0.0)), format="%.2f"),
-    }
+    # Preparar dados para o Data Editor
+    table_data = []
+    for tipo, precos in tipo_equip_data.items():
+        row = {
+            "Tipo Equipamento": tipo,
+            "Preço 1 (R$)": precos.get("price1", 0.0),
+            "Preço 2 (R$)": precos.get("price2", 0.0),
+            "Preço 3 (R$)": precos.get("price3", 0.0),
+        }
+        table_data.append(row)
     
-    if st.button("Salvar Preços", type="primary"):
-        if umdb.update_pricing_config({"TIPO_EQUIPAMENTO": prices}):
-            st.success("Preços atualizados com sucesso!")
+    df_prices = pd.DataFrame(table_data)
+    
+    # Editor de Dados Editável
+    edited_df = st.data_editor(
+        df_prices,
+        column_config={
+            "Tipo Equipamento": st.column_config.TextColumn("Tipo", disabled=True),
+            "Preço 1 (R$)": st.column_config.NumberColumn("Preço 1 (Padrão)", format="R$ %.2f", min_value=0.0),
+            "Preço 2 (R$)": st.column_config.NumberColumn("Preço 2", format="R$ %.2f", min_value=0.0),
+            "Preço 3 (R$)": st.column_config.NumberColumn("Preço 3", format="R$ %.2f", min_value=0.0),
+        },
+        use_container_width=True,
+        hide_index=True,
+        key="price_editor"
+    )
+
+    if st.button("💾 Salvar Tabela de Preços", type="primary"):
+        # Converter de volta para o formato do dicionário do Firestore
+        new_pricing_config = {}
+        for index, row in edited_df.iterrows():
+            tipo = row["Tipo Equipamento"]
+            new_pricing_config[tipo] = {
+                "price1": float(row["Preço 1 (R$)"]),
+                "price2": float(row["Preço 2 (R$)"]),
+                "price3": float(row["Preço 3 (R$)"]),
+            }
+        
+        if umdb.update_pricing_config({"TIPO_EQUIPAMENTO": new_pricing_config}):
+            st.success("Tabelas de preços atualizadas com sucesso!")
             st.rerun()
         else:
             st.error("Ocorreu um erro ao salvar os preços.")
@@ -110,13 +139,11 @@ else:
     for model, current_type in sorted(model_types.items()):
         with cols[col_index]:
             try:
-                # Garante que o tipo atual esteja na lista, mesmo que seja inválido
                 if current_type not in tipos_disponiveis:
                     tipos_disponiveis.append(current_type)
-                
                 default_index = tipos_disponiveis.index(current_type)
             except ValueError:
-                default_index = 0 # Padrão para o primeiro item se o tipo atual não for encontrado
+                default_index = 0
 
             new_type = st.selectbox(f"Modelo: **{model}**", options=tipos_disponiveis, index=default_index, key=f"model_{model}")
             
