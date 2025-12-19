@@ -209,6 +209,7 @@ for _, row in df_month.iterrows():
             
             client_comm_total += comm_val
             
+            # CORREÇÃO: Multiplica pct por 100 para exibição correta (ex: 15.0 para 15%)
             detailed_rows.append({
                 "Vendedor": seller,
                 "Cliente": client,
@@ -216,7 +217,7 @@ for _, row in df_month.iterrows():
                 "Tipo": tipo,
                 "Valor Faturado": val_faturado,
                 "Valor Base": base_price,
-                "% Aplicado": pct,
+                "% Aplicado": pct * 100, # Multiplicado por 100
                 "Comissão (R$)": comm_val
             })
             
@@ -227,8 +228,6 @@ for _, row in df_month.iterrows():
         # Fallback para dados antigos
         val_total = float(row.get('valor_total', 0))
         base_gprs = get_base_price_stock("GPRS", selected_table_key)
-        # Estimativa simples (sem detalhe não dá pra saber o range exato)
-        # Assumimos uma taxa conservadora ou média se não tiver detalhe
         taxa_est = 0.02 
         comm_val = val_total * taxa_est
         
@@ -242,7 +241,7 @@ for _, row in df_month.iterrows():
             "Tipo": "-",
             "Valor Faturado": val_total,
             "Valor Base": base_gprs,
-            "% Aplicado": taxa_est,
+            "% Aplicado": taxa_est * 100, # Multiplicado por 100
             "Comissão (R$)": comm_val
         })
 
@@ -295,7 +294,7 @@ else:
         column_config={
             "Valor Faturado": st.column_config.NumberColumn(format="R$ %.2f"),
             "Valor Base": st.column_config.NumberColumn(format="R$ %.2f"),
-            "% Aplicado": st.column_config.NumberColumn(format="%.0f%%"),
+            "% Aplicado": st.column_config.NumberColumn(format="%.1f%%"), # Formatação com sufixo %
             "Comissão (R$)": st.column_config.NumberColumn(format="R$ %.2f"),
         },
         hide_index=True, use_container_width=True
