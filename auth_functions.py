@@ -1,73 +1,45 @@
 # auth_functions.py
 import streamlit as st
-from firebase_admin import auth
-from firebase_config import db, get_auth_admin_client
+from firebase_config import auth
+import time
 
-# Obtém o cliente de autenticação do Admin SDK
-auth_admin = get_auth_admin_client()
-
-def get_user_role(uid):
-    """Busca o nível de acesso (role) de um usuário no Firestore pelo UID."""
+def login_user(email, password):
     try:
-        user_doc = db.collection('users').document(uid).get()
-        if user_doc.exists:
-            return user_doc.to_dict().get('role', 'Usuário')
+        user = auth.sign_in_with_email_and_password(email, password)
+        user_info = auth.get_account_info(user['idToken'])
+        return user, user_info
     except Exception as e:
-        st.error(f"Erro ao buscar o nível de acesso: {e}")
-    return 'Usuário'
+        return None, str(e)
 
-def get_all_users():
-    """Busca todos os usuários do Firebase Authentication e combina com suas roles do Firestore."""
+def reset_password(email):
     try:
-        all_users = []
-        for user in auth_admin.list_users().iterate_all():
-            user_data = {
-                "uid": user.uid,
-                "email": user.email,
-                "disabled": user.disabled,
-                "role": get_user_role(user.uid)
-            }
-            all_users.append(user_data)
-        return all_users
+        auth.send_password_reset_email(email)
+        return True, None
     except Exception as e:
-        st.error(f"Erro ao carregar a lista de usuários: {e}")
-        return []
+        return False, str(e)
 
-def create_new_user(email, password, role):
-    """Cria um novo usuário no Firebase Auth e define sua role no Firestore."""
-    try:
-        new_user = auth_admin.create_user(email=email, password=password, disabled=False)
-        db.collection('users').document(new_user.uid).set({
-            'email': email,
-            'role': role
-        })
-        return True
-    except Exception as e:
-        # Adiciona tratamento específico para o erro de JWT
-        if 'invalid_grant' in str(e) or 'JWT' in str(e):
-             st.error("🚨 Erro de Autenticação (Invalid JWT Signature).")
-             st.warning("Isso indica que as credenciais da 'service_account' nos Secrets do Streamlit estão incorretas ou desatualizadas. Por favor, gere uma nova chave privada no Firebase e atualize o secret.")
+# --- NOVO: BARRA LATERAL PADRONIZADA ---
+def render_sidebar():
+    """Renderiza a sidebar padrão para todas as páginas internas."""
+    with st.sidebar:
+        st.image("imgs/v-c.png", width=140)
+        
+        if "user_info" in st.session_state:
+            nome = st.session_state.get('name', 'Usuário')
+            role = st.session_state.get('role', 'Nível Acesso')
+            
+            st.markdown(f"""
+            <div style='background-color: #F0F2F6; padding: 10px; border-radius: 5px; margin-bottom: 20px;'>
+                <small>Bem-vindo(a),</small><br>
+                <b>{nome}</b><br>
+                <span style='font-size: 0.8em; color: #666;'>{role}</span>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            st.markdown("---")
+            if st.button("🚪 Sair do Sistema", use_container_width=True):
+                for key in list(st.session_state.keys()):
+                    del st.session_state[key]
+                st.rerun()
         else:
-            st.error(f"Erro ao criar usuário: {e}")
-        return False
-
-def update_user_status(uid, is_disabled):
-    """Atualiza o status (habilitado/desabilitado) de um usuário no Firebase Authentication."""
-    try:
-        auth_admin.update_user(uid, disabled=is_disabled)
-        status_text = "desabilitado" if is_disabled else "re-habilitado"
-        st.success(f"Usuário {status_text} com sucesso!")
-        return True
-    except Exception as e:
-        st.error(f"Erro ao atualizar o status do usuário: {e}")
-        return False
-
-def update_user_role(uid, new_role):
-    """Atualiza a role de um usuário no documento correspondente no Firestore."""
-    try:
-        db.collection('users').document(uid).update({'role': new_role})
-        st.success("Nível de acesso atualizado com sucesso!")
-        return True
-    except Exception as e:
-        st.error(f"Erro ao atualizar o nível de acesso do usuário: {e}")
-        return False
+            st.warning("Sessão não iniciada.")
