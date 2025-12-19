@@ -4,6 +4,8 @@ from firebase_config import db
 from datetime import datetime
 import pandas as pd
 
+# --- FUNÇÕES DE LOG E SISTEMA ---
+
 def log_action(level, user, message, details=None):
     """Registra uma ação no log do sistema no Firestore."""
     try:
@@ -19,13 +21,14 @@ def log_action(level, user, message, details=None):
         st.warning(f"Não foi possível registrar o log: {e}")
 
 def get_system_logs():
-    """Busca todos os logs do sistema, ordenados por data."""
     try:
         logs_ref = db.collection("system_logs").order_by("timestamp", direction="DESCENDING").stream()
         return [log.to_dict() for log in logs_ref]
     except Exception as e:
         st.error(f"Erro ao buscar logs do sistema: {e}")
         return []
+
+# --- FUNÇÕES DE FATURAMENTO E HISTÓRICO ---
 
 def get_billing_history():
     """Busca todo o histórico de faturamento, ordenado por data."""
@@ -52,17 +55,34 @@ def get_last_billing_for_client(client_name):
         st.error(f"Erro ao buscar o último faturamento do cliente: {e}")
         return None
 
-def log_faturamento(faturamento_data):
-    """Salva um registro de faturamento gerado no Firestore."""
+def log_faturamento(faturamento_data, detalhes_itens=None):
+    """
+    Salva um registro de faturamento gerado no Firestore.
+    Agora suporta salvar o 'detalhes_itens' (lista de dicionários) para cálculo de comissão item a item.
+    """
     try:
         user_email = st.session_state.get("user_info", {}).get("email", "sistema")
+        
+        # Dados principais do cabeçalho
         faturamento_data.update({
             "data_geracao": datetime.now(),
             "gerado_por": user_email
         })
+        
+        # Se houver itens detalhados (terminais), adiciona ao payload
+        if detalhes_itens is not None and isinstance(detalhes_itens, list):
+            # Firestore tem limite de tamanho por documento (1MB). 
+            # Se a lista for muito grande, ideal seria salvar em subcoleção, 
+            # mas para uso moderado, salvar dentro do documento funciona.
+            faturamento_data["itens_detalhados"] = detalhes_itens
+
         db.collection("billing_history").add(faturamento_data)
-        log_action("INFO", user_email, "Relatório de faturamento gerado e salvo.", faturamento_data)
-        st.toast("Histórico de faturamento salvo com sucesso!")
+        
+        # Log sem os detalhes pesados
+        log_data_summary = {k: v for k, v in faturamento_data.items() if k != "itens_detalhados"}
+        log_action("INFO", user_email, "Relatório de faturamento gerado e salvo.", log_data_summary)
+        
+        st.toast("Histórico de faturamento (com detalhes) salvo com sucesso!")
     except Exception as e:
         st.error(f"Erro ao salvar o histórico de faturamento: {e}")
 
@@ -91,9 +111,7 @@ def get_tracker_inventory():
         return []
 
 def update_tracker_inventory(df):
-    """
-    Atualiza/Cria registros de rastreadores no Firestore em lote.
-    """
+    """Atualiza/Cria registros de rastreadores no Firestore em lote."""
     try:
         batch = db.batch()
         count = 0
@@ -118,14 +136,10 @@ def update_tracker_inventory(df):
 
 @st.cache_data(ttl=600)
 def get_unique_models_and_types():
-    """Busca todos os modelos únicos de rastreador e seus tipos associados."""
     try:
         trackers = get_tracker_inventory()
-        if not trackers:
-            return {}
-        
+        if not trackers: return {}
         df = pd.DataFrame(trackers)
-        # Pega o primeiro tipo encontrado para cada modelo
         model_types = df.groupby('Modelo')['Tipo'].first().to_dict()
         return model_types
     except Exception as e:
@@ -133,44 +147,33 @@ def get_unique_models_and_types():
         return {}
 
 def update_type_for_models(updates):
-    """
-    Atualiza o tipo para todos os rastreadores de um ou mais modelos.
-    'updates' é um dicionário: {'Modelo': 'NovoTipo', ...}
-    """
     success_count = 0
     failed_models = []
-    
     for model, new_type in updates.items():
         try:
             docs = db.collection('trackers').where('Modelo', '==', model).stream()
             batch = db.batch()
-            
             doc_found = False
             for doc in docs:
                 doc_found = True
                 batch.update(doc.reference, {'Tipo': new_type})
-            
             if doc_found:
                 batch.commit()
                 success_count += 1
             else:
                 failed_models.append(model)
-
         except Exception as e:
             st.error(f"Erro ao atualizar o modelo '{model}': {e}")
             failed_models.append(model)
-            
     return success_count, failed_models
-
 
 @st.cache_data(ttl=3600)
 def get_pricing_config():
     """
     Busca as configurações de preço do Firestore.
-    Retorna uma estrutura normalizada com 3 preços por tipo.
+    Retorna estrutura normalizada com 3 preços por tipo.
     """
     defaults = {"GPRS": 59.90, "SATELITE": 159.90, "CAMERA": 0.0, "RADIO": 0.0}
-    
     try:
         config_doc = db.collection("settings").document("pricing").get()
         data = config_doc.to_dict() if config_doc.exists else {}
@@ -181,21 +184,13 @@ def get_pricing_config():
     tipo_equip = data.get("TIPO_EQUIPAMENTO", {})
     normalized_types = {}
     
-    # Garante que todos os tipos (padrão e existentes) tenham a estrutura correta
     all_keys = set(tipo_equip.keys()) | set(defaults.keys())
     
     for key in all_keys:
         val = tipo_equip.get(key, defaults.get(key, 0.0))
-        
         if isinstance(val, (int, float)):
-            # Converte formato antigo (float) para novo formato (dict com 3 preços)
-            normalized_types[key] = {
-                "price1": float(val),
-                "price2": float(val),
-                "price3": float(val)
-            }
+            normalized_types[key] = {"price1": float(val), "price2": float(val), "price3": float(val)}
         elif isinstance(val, dict):
-            # Garante que as chaves existam e sejam float
             normalized_types[key] = {
                 "price1": float(val.get("price1", 0.0)),
                 "price2": float(val.get("price2", 0.0)),
@@ -207,7 +202,6 @@ def get_pricing_config():
     return {"TIPO_EQUIPAMENTO": normalized_types}
 
 def update_pricing_config(new_prices):
-    """Atualiza as configurações de preço no Firestore."""
     try:
         db.collection("settings").document("pricing").set(new_prices, merge=True)
         st.cache_data.clear()
