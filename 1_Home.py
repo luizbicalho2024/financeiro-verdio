@@ -1,11 +1,10 @@
-# 1_Home.py
 import streamlit as st
 import auth_functions as auth
 from firebase_config import db
 
 st.set_page_config(page_title="Verdio Financeiro", page_icon="imgs/v-c.png", layout="centered")
 
-# CSS para limpar o topo padrão do Streamlit na home
+# CSS para limpar o topo padrão e centralizar
 st.markdown("""
 <style>
     [data-testid="stHeader"] {visibility: hidden;}
@@ -13,13 +12,16 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Layout Centralizado
-st.markdown("<br><br>", unsafe_allow_html=True) # Espaço topo
+st.markdown("<br><br>", unsafe_allow_html=True)
 col1, col2, col3 = st.columns([1, 2, 1])
 
 with col2:
-    st.image("imgs/logo.png", use_container_width=True)
-    st.markdown("<h3 style='text-align: center; color: #555;'>Acesso ao Sistema</h3>", unsafe_allow_html=True)
+    try:
+        st.image("imgs/logo.png", use_container_width=True)
+    except:
+        st.header("Verdio Financeiro")
+        
+    st.markdown("<h3 style='text-align: center; color: #006494;'>Acesso ao Sistema</h3>", unsafe_allow_html=True)
     
     with st.form("login_form"):
         email = st.text_input("E-mail Corporativo")
@@ -35,7 +37,7 @@ with col2:
                 if user:
                     st.session_state['user_info'] = user
                     
-                    # Buscar dados extras do usuário no Firestore
+                    # Buscar perfil do usuário
                     try:
                         user_doc = db.collection("users").document(email).get()
                         if user_doc.exists:
@@ -43,15 +45,15 @@ with col2:
                             st.session_state['role'] = user_data.get('role', 'Usuário')
                             st.session_state['name'] = user_data.get('name', email.split('@')[0])
                         else:
-                            st.session_state['role'] = 'Admin' # Fallback para primeiro acesso
+                            st.session_state['role'] = 'Admin' # Fallback
                             st.session_state['name'] = email.split('@')[0]
                     except:
                         st.session_state['role'] = 'Usuário'
                         st.session_state['name'] = 'Colaborador'
 
                     st.toast("Login realizado com sucesso!", icon="✅")
-                    st.switch_page("pages/94_Gestao_Estoque.py") # Redireciona para uma página útil
+                    st.switch_page("pages/94_Gestao_Estoque.py")
                 else:
-                    st.error(f"Falha no login: {info}")
+                    st.error(f"Falha no login. Verifique suas credenciais.")
 
-    st.markdown("<div style='text-align: center; margin-top: 20px; color: #888; font-size: 0.8em;'>Verdio Soluções Financeiras v2.0</div>", unsafe_allow_html=True)
+    st.markdown("<div style='text-align: center; margin-top: 50px; color: #ccc; font-size: 0.8em;'>Verdio Soluções Financeiras v2.1</div>", unsafe_allow_html=True)
