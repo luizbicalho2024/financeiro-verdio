@@ -1,4 +1,3 @@
-# pages/94_Gestao_Estoque.py
 import sys
 import os
 import pandas as pd
@@ -13,7 +12,6 @@ st.set_page_config(layout="wide", page_title="Estoque", page_icon="📦")
 if "user_info" not in st.session_state: st.error("🔒 Login necessário."); st.stop()
 if st.session_state.get("role", "Usuário").lower() != "admin": st.error("🚫 Acesso restrito."); st.stop()
 
-# --- SIDEBAR PADRÃO ---
 af.render_sidebar()
 
 # --- HEADER ---
@@ -26,17 +24,16 @@ with col_h1:
 stock_data = umdb.get_tracker_inventory()
 df_stock = pd.DataFrame(stock_data) if stock_data else pd.DataFrame()
 
-# --- KPIs (INDICADORES) ---
+# --- KPIs ---
 if not df_stock.empty:
     k1, k2, k3, k4 = st.columns(4)
     k1.metric("Total Rastreadores", len(df_stock))
-    k2.metric("GPRS", len(df_stock[df_stock['Tipo'] == 'GPRS']))
-    k3.metric("Satelitais", len(df_stock[df_stock['Tipo'] == 'SATELITE']))
-    k4.metric("Modelos Únicos", df_stock['Modelo'].nunique())
+    k2.metric("GPRS", len(df_stock[df_stock['Tipo'] == 'GPRS']) if 'Tipo' in df_stock else 0)
+    k3.metric("Satelitais", len(df_stock[df_stock['Tipo'] == 'SATELITE']) if 'Tipo' in df_stock else 0)
+    k4.metric("Modelos Únicos", df_stock['Modelo'].nunique() if 'Modelo' in df_stock else 0)
 
 st.markdown("---")
 
-# --- ABAS PARA ORGANIZAÇÃO ---
 tab1, tab2, tab3 = st.tabs(["📋 Inventário & Busca", "💲 Tabelas de Preço", "📤 Importação & Ajustes"])
 
 # ABA 1: VISUALIZAÇÃO
@@ -102,7 +99,6 @@ with tab3:
         if uploaded_file and st.button("Processar Upload"):
             try:
                 df_up = pd.read_excel(uploaded_file, header=11, dtype=str)
-                # ... (Lógica de tratamento existente mantida simplificada aqui) ...
                 if 'Nº Equipamento' not in df_up.columns and 'Nº Série' in df_up.columns:
                     df_up.rename(columns={'Nº Série': 'Nº Equipamento'}, inplace=True)
                 
