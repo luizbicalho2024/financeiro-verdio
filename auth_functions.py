@@ -1,86 +1,73 @@
+# auth_functions.py
 import streamlit as st
-import requests
-import time
+from firebase_admin import auth
+from firebase_config import db, get_auth_admin_client
 
-# --- CONFIGURAÇÃO OBRIGATÓRIA ---
-# Substitua pela sua Chave de API da Web (Firebase Console > Configurações do Projeto > Geral)
-# Se estiver usando st.secrets, pode deixar: st.secrets["FIREBASE_WEB_API_KEY"]
-FIREBASE_WEB_API_KEY = "SUA_WEB_API_KEY_AQUI" 
+# Obtém o cliente de autenticação do Admin SDK
+auth_admin = get_auth_admin_client()
 
-def login_user(email, password):
-    """
-    Realiza login usando a API REST do Google Identity Toolkit.
-    """
-    # Verifica se a chave foi configurada
-    if FIREBASE_WEB_API_KEY == "SUA_WEB_API_KEY_AQUI":
-        return None, "Erro de Configuração: WEB API KEY não definida no arquivo auth_functions.py"
-
-    url = f"https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key={FIREBASE_WEB_API_KEY}"
-    payload = {"email": email, "password": password, "returnSecureToken": True}
-    
+def get_user_role(uid):
+    """Busca o nível de acesso (role) de um usuário no Firestore pelo UID."""
     try:
-        r = requests.post(url, json=payload)
-        data = r.json()
-        
-        if r.status_code == 200:
-            return data, None
-        else:
-            error_msg = data.get('error', {}).get('message', 'Erro desconhecido')
-            if "INVALID_LOGIN_CREDENTIALS" in error_msg or "INVALID_PASSWORD" in error_msg:
-                return None, "E-mail ou senha incorretos."
-            elif "EMAIL_NOT_FOUND" in error_msg:
-                return None, "Usuário não encontrado."
-            elif "TOO_MANY_ATTEMPTS" in error_msg:
-                return None, "Muitas tentativas. Aguarde."
-            return None, f"Erro: {error_msg}"
-            
+        user_doc = db.collection('users').document(uid).get()
+        if user_doc.exists:
+            return user_doc.to_dict().get('role', 'Usuário')
     except Exception as e:
-        return None, f"Erro de conexão: {str(e)}"
+        st.error(f"Erro ao buscar o nível de acesso: {e}")
+    return 'Usuário'
 
-def reset_password(email):
-    """Envia e-mail de redefinição via API REST."""
-    if FIREBASE_WEB_API_KEY == "SUA_WEB_API_KEY_AQUI":
-        return False, "API Key não configurada."
-
-    url = f"https://identitytoolkit.googleapis.com/v1/accounts:sendOobCode?key={FIREBASE_WEB_API_KEY}"
-    payload = {"requestType": "PASSWORD_RESET", "email": email}
-    
+def get_all_users():
+    """Busca todos os usuários do Firebase Authentication e combina com suas roles do Firestore."""
     try:
-        r = requests.post(url, json=payload)
-        if r.status_code == 200:
-            return True, None
-        else:
-            return False, r.json().get('error', {}).get('message', 'Erro desconhecido')
+        all_users = []
+        for user in auth_admin.list_users().iterate_all():
+            user_data = {
+                "uid": user.uid,
+                "email": user.email,
+                "disabled": user.disabled,
+                "role": get_user_role(user.uid)
+            }
+            all_users.append(user_data)
+        return all_users
     except Exception as e:
-        return False, str(e)
+        st.error(f"Erro ao carregar a lista de usuários: {e}")
+        return []
 
-def render_sidebar():
-    """Renderiza a sidebar padrão."""
-    with st.sidebar:
-        try:
-            # Correção do aviso use_container_width
-            st.image("imgs/v-c.png", width=140)
-        except:
-            st.header("Verdio")
-
-        if "user_info" in st.session_state:
-            nome = st.session_state.get('name', 'Usuário')
-            role = st.session_state.get('role', 'Acesso')
-            
-            st.markdown(f"""
-            <div style='background-color: #F0F2F6; padding: 10px; border-radius: 5px; margin-bottom: 20px; color: #333;'>
-                <small>Logado como:</small><br>
-                <b>{nome}</b><br>
-                <span style='font-size: 0.8em; color: #666;'>{role}</span>
-            </div>
-            """, unsafe_allow_html=True)
-            
-            st.markdown("---")
-            if st.button("🚪 Sair do Sistema"):
-                for key in list(st.session_state.keys()):
-                    del st.session_state[key]
-                st.switch_page("1_Home.py")
+def create_new_user(email, password, role):
+    """Cria um novo usuário no Firebase Auth e define sua role no Firestore."""
+    try:
+        new_user = auth_admin.create_user(email=email, password=password, disabled=False)
+        db.collection('users').document(new_user.uid).set({
+            'email': email,
+            'role': role
+        })
+        return True
+    except Exception as e:
+        # Adiciona tratamento específico para o erro de JWT
+        if 'invalid_grant' in str(e) or 'JWT' in str(e):
+             st.error("🚨 Erro de Autenticação (Invalid JWT Signature).")
+             st.warning("Isso indica que as credenciais da 'service_account' nos Secrets do Streamlit estão incorretas ou desatualizadas. Por favor, gere uma nova chave privada no Firebase e atualize o secret.")
         else:
-            st.warning("Sessão não iniciada.")
-            if st.button("Ir para Login"):
-                st.switch_page("1_Home.py")
+            st.error(f"Erro ao criar usuário: {e}")
+        return False
+
+def update_user_status(uid, is_disabled):
+    """Atualiza o status (habilitado/desabilitado) de um usuário no Firebase Authentication."""
+    try:
+        auth_admin.update_user(uid, disabled=is_disabled)
+        status_text = "desabilitado" if is_disabled else "re-habilitado"
+        st.success(f"Usuário {status_text} com sucesso!")
+        return True
+    except Exception as e:
+        st.error(f"Erro ao atualizar o status do usuário: {e}")
+        return False
+
+def update_user_role(uid, new_role):
+    """Atualiza a role de um usuário no documento correspondente no Firestore."""
+    try:
+        db.collection('users').document(uid).update({'role': new_role})
+        st.success("Nível de acesso atualizado com sucesso!")
+        return True
+    except Exception as e:
+        st.error(f"Erro ao atualizar o nível de acesso do usuário: {e}")
+        return False
