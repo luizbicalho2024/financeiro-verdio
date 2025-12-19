@@ -12,7 +12,7 @@ import user_management_db as umdb
 from fpdf import FPDF
 import numpy as np
 
-# --- CLASSE PARA GERAR PDF COM IDENTIDADE VISUAL (VERSÃO FINAL) ---
+# --- CLASSE PARA GERAR PDF COM IDENTIDADE VISUAL ---
 class PDF(FPDF):
     def header(self):
         try:
@@ -153,96 +153,51 @@ def create_pdf_report(nome_cliente, periodo, totais, df_cheio, df_ativados, df_d
     def draw_table(title, df, col_widths, available_cols, header_map):
         if not df.empty:
             pdf.set_font("Arial", "B", 12)
-            if pdf.get_y() > pdf.h - 60:
-                pdf.add_page()
+            if pdf.get_y() > pdf.h - 60: pdf.add_page()
             
-            pdf.cell(0, 10, title, 0, 1, "L")
-            pdf.set_font("Arial", "B", 7)
-            
+            pdf.cell(0, 10, title, 0, 1, "L"); pdf.set_font("Arial", "B", 7)
             header = [h for h in available_cols if h in df.columns]
-            header_row_height = 8
-            y_start = pdf.get_y()
-            x_start = pdf.get_x()
+            header_row_height = 8; y_start = pdf.get_y(); x_start = pdf.get_x()
             
+            for h in header: pdf.cell(col_widths.get(h, 20), header_row_height, '', border=1, ln=0, align='C')
+            
+            pdf.set_xy(x_start, y_start); current_x = x_start
             for h in header:
-                pdf.cell(col_widths.get(h, 20), header_row_height, '', border=1, ln=0, align='C')
+                width = col_widths.get(h, 20); header_text = header_map.get(h, h)
+                pdf.set_x(current_x); pdf.multi_cell(width, 4, header_text, border=0, align='C'); current_x += width; pdf.set_y(y_start)
             
-            pdf.set_xy(x_start, y_start)
-            current_x = x_start
-            for h in header:
-                width = col_widths.get(h, 20)
-                header_text = header_map.get(h, h)
-                pdf.set_x(current_x)
-                pdf.multi_cell(width, 4, header_text, border=0, align='C')
-                current_x += width
-                pdf.set_y(y_start)
-            
-            pdf.set_y(y_start + header_row_height)
-            pdf.set_font("Arial", "", 6)
+            pdf.set_y(y_start + header_row_height); pdf.set_font("Arial", "", 6)
             for _, row in df.iterrows():
                 for h in header:
                     cell_text = str(row[h])
-                    if isinstance(row[h], datetime) and pd.notna(row[h]):
-                        cell_text = row[h].strftime('%d/%m/%Y')
-                    elif isinstance(row[h], (float, int)):
-                        if 'Valor' in h:
-                            cell_text = f"R$ {row[h]:,.2f}"
-                        else:
-                            cell_text = str(row[h])
-                    elif pd.isna(row[h]):
-                        cell_text = ""
-                    
+                    if isinstance(row[h], datetime) and pd.notna(row[h]): cell_text = row[h].strftime('%d/%m/%Y')
+                    elif isinstance(row[h], (float, int)): cell_text = f"R$ {row[h]:,.2f}" if 'Valor' in h else str(row[h])
+                    elif pd.isna(row[h]): cell_text = ""
                     pdf.cell(col_widths.get(h, 20), 6, cell_text, 1, 0, 'C')
                 pdf.ln()
-            
-            if pdf.get_y() < pdf.h - 55:
-                pdf.ln(5)
+            if pdf.get_y() < pdf.h - 55: pdf.ln(5)
             
     header_map = {'Nº Equipamento': 'Nº\nEquipamento', 'Valor a Faturar': 'Valor a\nFaturar', 'Data Ativação': 'Data\nAtivação', 'Data Desativação': 'Data\nDesativação', 'Dias Ativos Mês': 'Dias\nAtivos', 'Suspenso Dias Mes': 'Dias\nSuspensos', 'Dias a Faturar': 'Dias a\nFaturar', 'Valor Unitario': 'Valor\nUnitário'}
-    
     widths_cheio = {'Terminal': 38, 'Nº Equipamento': 38, 'Placa': 25, 'Modelo': 34, 'Tipo': 20, 'Valor a Faturar': 35}
     draw_table("Detalhamento do Faturamento Cheio", df_cheio, widths_cheio, list(widths_cheio.keys()), header_map)
-    
-    widths_proporcional = {
-        'Terminal': 19, 
-        'Nº Equipamento': 20, 
-        'Modelo': 18, 
-        'Tipo': 14, 
-        'Data Ativação': 17, 
-        'Data Desativação': 17, 
-        'Dias Ativos Mês': 13, 
-        'Suspenso Dias Mes': 16, 
-        'Dias a Faturar': 13, 
-        'Valor Unitario': 19, 
-        'Valor a Faturar': 19
-    }
+    widths_proporcional = {'Terminal': 19, 'Nº Equipamento': 20, 'Modelo': 18, 'Tipo': 14, 'Data Ativação': 17, 'Data Desativação': 17, 'Dias Ativos Mês': 13, 'Suspenso Dias Mes': 16, 'Dias a Faturar': 13, 'Valor Unitario': 19, 'Valor a Faturar': 19}
     cols_proporcionais = ['Terminal', 'Nº Equipamento', 'Modelo', 'Tipo', 'Data Ativação', 'Data Desativação', 'Dias Ativos Mês', 'Suspenso Dias Mes', 'Dias a Faturar', 'Valor Unitario', 'Valor a Faturar']
-    
     draw_table("Detalhamento Proporcional (Ativações no Mês)", df_ativados, widths_proporcional, cols_proporcionais, header_map)
     draw_table("Detalhamento Proporcional (Desativações no Mês)", df_desativados, widths_proporcional, cols_proporcionais, header_map)
     draw_table("Detalhamento dos Terminais Suspensos (Faturamento Prop.)", df_suspensos, widths_proporcional, cols_proporcionais, header_map)
     
     return bytes(pdf.output(dest='S').encode('latin-1', errors='replace'))
 
-# --- 3. INTERFACE DA PÁGINA ---
-st.image("imgs/logo.png", width=250)
-st.markdown("<h1 style='text-align: center; color: #006494;'>Verdio Assistente de Faturamento</h1>", unsafe_allow_html=True)
-st.markdown("---")
-
 # --- 4. INPUTS DE CONFIGURAÇÃO ---
 st.sidebar.header("Valores para este Faturamento")
 pricing_config = umdb.get_pricing_config().get("TIPO_EQUIPAMENTO", {})
-
 default_prices = st.session_state.get('prices_to_apply', pricing_config)
 if 'prices_to_apply' in st.session_state: del st.session_state['prices_to_apply']
 
 prices = {}
 for equip_type in sorted(pricing_config.keys()):
-    # CORREÇÃO: Extrair o Preço 1 do dicionário de preços para uso padrão
     val = default_prices.get(equip_type, 0.0)
-    if isinstance(val, dict):
-        val = val.get("price1", 0.0)
-    
+    if isinstance(val, dict): val = val.get("price1", 0.0)
     prices[equip_type] = st.sidebar.number_input(f"Preço {equip_type}", min_value=0.0, value=float(val), format="%.2f")
 
 # --- 5. UPLOAD DO FICHEIRO ---
@@ -255,8 +210,7 @@ st.markdown("---")
 if uploaded_file:
     tracker_inventory = umdb.get_tracker_inventory()
     if not tracker_inventory:
-        st.warning("⚠️ Nenhum dado de estoque de rastreadores encontrado. Atualize o estoque na página de 'Gestão de Estoque'.")
-        st.stop()
+        st.warning("⚠️ Nenhum dado de estoque de rastreadores encontrado."); st.stop()
     
     file_bytes = uploaded_file.getvalue()
     nome_cliente, periodo_relatorio, df_final, not_found, error = processar_planilha_faturamento(file_bytes, tracker_inventory, prices)
@@ -266,19 +220,12 @@ if uploaded_file:
     elif df_final is not None:
         last_billing = umdb.get_last_billing_for_client(nome_cliente)
         if last_billing:
-            last_prices = {
-                "GPRS": last_billing.get("valor_unitario_gprs", prices.get("GPRS", 0)),
-                "SATELITE": last_billing.get("valor_unitario_satelital", prices.get("SATELITE", 0)),
-            }
-            # Comparação simplificada (apenas alerta se houver diferença)
+            last_prices = {"GPRS": last_billing.get("valor_unitario_gprs", prices.get("GPRS", 0)), "SATELITE": last_billing.get("valor_unitario_satelital", prices.get("SATELITE", 0))}
             if any(prices.get(k, 0) != v for k, v in last_prices.items()):
                 st.info(f"💡 Encontramos os valores utilizados no último faturamento para **{nome_cliente}**.")
-                cols = st.columns(len(last_prices) + 1)
-                i=0
-                for p_type, p_val in last_prices.items():
-                    cols[i].metric(f"Último Preço {p_type}", f"R$ {p_val:.2f}"); i+=1
-                if cols[i].button("Aplicar valores e recalcular"):
-                    st.session_state['prices_to_apply'] = last_prices; st.rerun()
+                cols = st.columns(len(last_prices) + 1); i=0
+                for p_type, p_val in last_prices.items(): cols[i].metric(f"Último Preço {p_type}", f"R$ {p_val:.2f}"); i+=1
+                if cols[i].button("Aplicar valores e recalcular"): st.session_state['prices_to_apply'] = last_prices; st.rerun()
 
         if not_found:
             with st.expander("⚠️ Equipamentos Não Encontrados no Estoque", expanded=True):
@@ -294,35 +241,38 @@ if uploaded_file:
         total_geral = total_cheio + total_proporcional
 
         st.header("Resumo do Faturamento"); st.subheader(f"Cliente: {nome_cliente}"); st.caption(f"Período: {periodo_relatorio}")
-
         num_prop = len(df_ativados) + len(df_desativados)
         c1, c2, c3, c4, c5 = st.columns(5)
         c1.metric("Nº Fat. Cheio", len(df_cheio)); c2.metric("Nº Fat. Proporcional", num_prop); c3.metric("Nº Suspensos", len(df_suspensos))
         c4.metric("Total GPRS", len(df_final[df_final['Tipo'] == 'GPRS'])); c5.metric("Total Satelitais", len(df_final[df_final['Tipo'] == 'SATELITE']))
-        
         c1, c2, c3 = st.columns(3)
         c1.success(f"**Faturamento (Cheio):** R$ {total_cheio:,.2f}"); c2.warning(f"**Faturamento (Proporcional):** R$ {total_proporcional:,.2f}"); c3.info(f"**FATURAMENTO TOTAL:** R$ {total_geral:,.2f}")
         
         st.markdown("---"); st.subheader("Ações Finais")
         
+        # --- PREPARAÇÃO DOS DADOS DETALHADOS PARA SALVAR NO BANCO ---
+        # Convertemos o DataFrame final para uma lista de dicionários para salvar junto com o cabeçalho
+        cols_to_save = ['Terminal', 'Nº Equipamento', 'Modelo', 'Tipo', 'Categoria', 'Valor Unitario', 'Valor a Faturar', 'Dias a Faturar']
+        detalhes_itens = df_final[cols_to_save].to_dict(orient='records')
+        
         excel_data = to_excel(df_cheio, df_ativados, df_desativados, df_suspensos)
-        log_data = {"cliente": nome_cliente, "periodo_relatorio": periodo_relatorio, "valor_total": total_geral, "terminais_cheio": len(df_cheio), "terminais_proporcional": num_prop, "terminais_suspensos": len(df_suspensos), "terminais_gprs": len(df_final[df_final['Tipo'] == 'GPRS']), "terminais_satelitais": len(df_final[df_final['Tipo'] == 'SATELITE']), "valor_unitario_gprs": prices.get("GPRS", 0), "valor_unitario_satelital": prices.get("SATELITE", 0)}
+        
+        log_data = {
+            "cliente": nome_cliente, "periodo_relatorio": periodo_relatorio, "valor_total": total_geral, 
+            "terminais_cheio": len(df_cheio), "terminais_proporcional": num_prop, "terminais_suspensos": len(df_suspensos), 
+            "terminais_gprs": len(df_final[df_final['Tipo'] == 'GPRS']), "terminais_satelitais": len(df_final[df_final['Tipo'] == 'SATELITE']), 
+            "valor_unitario_gprs": prices.get("GPRS", 0), "valor_unitario_satelital": prices.get("SATELITE", 0)
+        }
+        
         pdf_data = create_pdf_report(nome_cliente, periodo_relatorio, {"cheio": total_cheio, "proporcional": total_proporcional, "geral": total_geral, "terminais_cheio": len(df_cheio), "terminais_proporcional": num_prop, "terminais_suspensos": len(df_suspensos), "terminais_gprs": len(df_final[df_final['Tipo'] == 'GPRS']), "terminais_satelitais": len(df_final[df_final['Tipo'] == 'SATELITE'])}, df_cheio, df_ativados, df_desativados, df_suspensos)
         
+        # --- BOTÃO COM A NOVA ASSINATURA DE LOG (PASSANDO DETALHES) ---
         c1, c2 = st.columns(2)
-        c1.download_button("📥 Exportar Excel e Salvar Histórico", excel_data, f"Faturamento_{nome_cliente.replace(' ', '_')}_{datetime.now().strftime('%Y-%m')}.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", on_click=umdb.log_faturamento, args=(log_data,))
-        c2.download_button("📄 Exportar Resumo em PDF", pdf_data, f"Resumo_Faturamento_{nome_cliente.replace(' ', '_')}_{datetime.now().strftime('%Y-%m')}.pdf", "application/pdf", on_click=umdb.log_faturamento, args=(log_data,))
+        c1.download_button("📥 Exportar Excel e Salvar Histórico", excel_data, f"Faturamento_{nome_cliente.replace(' ', '_')}_{datetime.now().strftime('%Y-%m')}.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", on_click=umdb.log_faturamento, args=(log_data, detalhes_itens))
+        c2.download_button("📄 Exportar Resumo em PDF", pdf_data, f"Resumo_Faturamento_{nome_cliente.replace(' ', '_')}_{datetime.now().strftime('%Y-%m')}.pdf", "application/pdf", on_click=umdb.log_faturamento, args=(log_data, detalhes_itens))
 
         st.markdown("---")
-        cols_to_show = ['Terminal', 'Nº Equipamento', 'Modelo', 'Tipo', 'Data Ativação', 'Dias Ativos Mês', 'Suspenso Dias Mes', 'Dias a Faturar', 'Valor Unitario', 'Valor a Faturar']
-        
         with st.expander("Detalhamento do Faturamento Cheio"):
             st.dataframe(df_cheio[['Terminal', 'Nº Equipamento', 'Modelo', 'Tipo', 'Dias a Faturar', 'Valor a Faturar']], use_container_width=True, hide_index=True)
-        with st.expander("Detalhamento Proporcional (Ativações no Mês)"):
-            st.dataframe(df_ativados[cols_to_show], use_container_width=True, hide_index=True)
-        with st.expander("Detalhamento Proporcional (Desativações no Mês)"):
-            st.dataframe(df_desativados[cols_to_show], use_container_width=True, hide_index=True)
-        with st.expander("Detalhamento dos Terminais Suspensos (Faturamento Proporcional)"):
-            st.dataframe(df_suspensos[cols_to_show], use_container_width=True, hide_index=True)
 else:
     st.info("Aguardando o carregamento do relatório para iniciar a análise.")
