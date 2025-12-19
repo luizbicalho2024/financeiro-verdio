@@ -35,7 +35,11 @@ else:
         df['Data Geração'] = pd.to_datetime(df['data_geracao']).dt.strftime('%d/%m/%Y %H:%M')
     
     display_cols = ['cliente', 'periodo_relatorio', 'valor_total', 'Data Geração', 'gerado_por', '_id']
-    df_display = df[display_cols].copy()
+    
+    # Garante que as colunas existam antes de selecionar
+    cols_to_use = [c for c in display_cols if c in df.columns]
+    df_display = df[cols_to_use].copy()
+    
     df_display = df_display.rename(columns={
         'cliente': 'Cliente',
         'periodo_relatorio': 'Mês de Referência',
@@ -48,12 +52,17 @@ else:
     
     with col_left:
         st.subheader("Registros de Faturamento")
+        
+        # Define as colunas visíveis (excluindo o _id da visualização)
+        visible_cols = ['Cliente', 'Mês de Referência', 'Valor Total (R$)', 'Data Geração', 'Gerado Por']
+        
         event = st.dataframe(
             df_display,
             column_config={
                 "Valor Total (R$)": st.column_config.NumberColumn(format="R$ %.2f"),
-                "_id": st.column_config.Column(hidden=True) # Esconde o ID técnico
+                # Removemos a configuração incorreta de hidden=True do _id
             },
+            column_order=visible_cols, # Oculta o _id visualmente, mas mantém no dataframe
             use_container_width=True,
             hide_index=True,
             selection_mode="single-row",
@@ -66,8 +75,9 @@ else:
     
     if selected_row:
         index = selected_row[0]
+        # Recupera o _id usando o índice da linha selecionada no dataframe original
         selected_id = df_display.iloc[index]['_id']
-        # Recupera o objeto original completo da lista history usando o ID
+        # Busca o objeto original completo na lista history
         selected_data = next((item for item in history if item["_id"] == selected_id), None)
 
     with col_right:
@@ -113,4 +123,6 @@ else:
             
         else:
             st.warning("⚠️ Este registro é antigo e não possui detalhamento item a item salvo. Apenas os totais estão disponíveis.")
-            st.json({k:v for k,v in selected_data.items() if k not in ['itens_detalhados', 'data_geracao']})
+            # Remove campos técnicos da visualização JSON
+            display_json = {k:v for k,v in selected_data.items() if k not in ['itens_detalhados', 'data_geracao', '_id']}
+            st.json(display_json)
