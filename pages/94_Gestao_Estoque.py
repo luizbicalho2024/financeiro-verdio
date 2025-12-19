@@ -9,8 +9,15 @@ import auth_functions as af
 
 st.set_page_config(layout="wide", page_title="Estoque", page_icon="📦")
 
-if "user_info" not in st.session_state: st.error("🔒 Login necessário."); st.stop()
-if st.session_state.get("role", "Usuário").lower() != "admin": st.error("🚫 Acesso restrito."); st.stop()
+# Verificação de Segurança
+if "user_info" not in st.session_state:
+    st.error("🔒 Login necessário.")
+    if st.button("Ir para Login"): st.switch_page("1_Home.py")
+    st.stop()
+
+if st.session_state.get("role", "Usuário").lower() != "admin":
+    st.error("🚫 Acesso restrito a Administradores.")
+    st.stop()
 
 af.render_sidebar()
 
@@ -53,13 +60,17 @@ with tab1:
 # ABA 2: PREÇOS
 with tab2:
     st.subheader("Tabelas de Preços (3 Níveis)")
+    st.info("Defina aqui os preços base que serão utilizados no cálculo de comissões.")
+    
     pricing_config = umdb.get_pricing_config()
     tipo_equip_data = pricing_config.get("TIPO_EQUIPAMENTO", {})
 
     table_data = []
     for tipo, precos in tipo_equip_data.items():
-        if isinstance(precos, (int, float)): precos = {"price1": precos, "price2": precos, "price3": precos}
-        elif not isinstance(precos, dict): precos = {}
+        if isinstance(precos, (int, float)):
+            precos = {"price1": precos, "price2": precos, "price3": precos}
+        elif not isinstance(precos, dict):
+            precos = {}
         
         table_data.append({
             "Tipo Equipamento": tipo,
@@ -76,7 +87,9 @@ with tab2:
             "Preço 2 (Médio)": st.column_config.NumberColumn(format="R$ %.2f"),
             "Preço 3 (Padrão)": st.column_config.NumberColumn(format="R$ %.2f"),
         },
-        use_container_width=True, hide_index=True, num_rows="fixed"
+        use_container_width=True,
+        hide_index=True,
+        num_rows="fixed"
     )
 
     if st.button("💾 Salvar Preços", type="primary"):
@@ -94,30 +107,53 @@ with tab2:
 with tab3:
     c1, c2 = st.columns(2)
     with c1:
-        st.subheader("Importar Planilha")
+        st.subheader("Importar Planilha de Estoque")
         uploaded_file = st.file_uploader("Upload Excel (.xlsx)", type=['xlsx'])
         if uploaded_file and st.button("Processar Upload"):
             try:
                 df_up = pd.read_excel(uploaded_file, header=11, dtype=str)
+                
+                # Ajuste de nomes de colunas comuns
                 if 'Nº Equipamento' not in df_up.columns and 'Nº Série' in df_up.columns:
                     df_up.rename(columns={'Nº Série': 'Nº Equipamento'}, inplace=True)
                 
-                df_final = df_up[['Nº Equipamento', 'Modelo', 'Tipo Equipamento']].rename(columns={'Tipo Equipamento': 'Tipo'}).dropna()
-                count = umdb.update_tracker_inventory(df_final)
-                st.success(f"{count} itens atualizados!")
-                st.rerun()
-            except Exception as e: st.error(f"Erro: {e}")
+                required = ['Nº Equipamento', 'Modelo', 'Tipo Equipamento']
+                if all(col in df_up.columns for col in required):
+                    df_final = df_up[required].rename(columns={'Tipo Equipamento': 'Tipo'}).dropna()
+                    
+                    with st.spinner("Salvando no banco de dados..."):
+                        count = umdb.update_tracker_inventory(df_final)
+                        if count:
+                            st.success(f"{count} itens atualizados com sucesso!")
+                            st.cache_data.clear()
+                            st.rerun()
+                else:
+                    st.error(f"Colunas obrigatórias não encontradas: {required}")
+            except Exception as e:
+                st.error(f"Erro ao processar arquivo: {e}")
 
     with c2:
-        st.subheader("Ajuste em Massa (Tipo)")
+        st.subheader("Ajuste Manual de Tipo por Modelo")
         model_types = umdb.get_unique_models_and_types()
         if model_types:
             updates = {}
-            for model, curr in model_types.items():
+            st.caption("Selecione o tipo correto para cada modelo detectado:")
+            
+            for model, curr in sorted(model_types.items()):
                 opts = ["GPRS", "SATELITE", "CAMERA", "RADIO"]
+                # Garante que o valor atual esteja na lista
                 if curr not in opts: opts.append(curr)
+                
                 new = st.selectbox(f"Modelo: {model}", opts, index=opts.index(curr), key=f"m_{model}")
-                if new != curr: updates[model] = new
+                if new != curr:
+                    updates[model] = new
             
             if st.button("Aplicar Ajustes de Tipo"):
-                if umdb.update_type_for_models(updates): st.rerun()
+                with st.spinner("Atualizando registros..."):
+                    success, failed = umdb.update_type_for_models(updates)
+                    if success:
+                        st.success(f"{success} modelos atualizados!")
+                        st.cache_data.clear()
+                        st.rerun()
+        else:
+            st.info("Nenhum modelo cadastrado.")
