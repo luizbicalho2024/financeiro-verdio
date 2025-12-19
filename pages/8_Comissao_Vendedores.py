@@ -82,6 +82,7 @@ if not history_data: st.warning("Nenhum histórico encontrado."); st.stop()
 seller_map = get_seller_mappings()
 df = pd.DataFrame(history_data)
 
+# Tratamento de Strings e Datas
 df['cliente'] = df['cliente'].astype(str).str.strip()
 if 'data_geracao' in df.columns:
     df['data_geracao'] = pd.to_datetime(df['data_geracao']).dt.tz_localize(None)
@@ -93,12 +94,23 @@ periodos = sorted(df['mes_ano'].unique(), reverse=True)
 if not periodos: st.warning("Sem períodos."); st.stop()
 periodo_sel = st.selectbox("Selecione o Mês:", periodos)
 
+# --- FILTRAGEM E REMOÇÃO DE DUPLICATAS (CORREÇÃO AQUI) ---
 df_filtered = df[df['mes_ano'] == periodo_sel].copy()
+
+# 1. Ordena por data de geração (mais recente primeiro)
+df_filtered = df_filtered.sort_values(by='data_geracao', ascending=False)
+
+# 2. Remove duplicatas mantendo apenas a primeira ocorrência (a mais recente) para cada cliente
+df_filtered = df_filtered.drop_duplicates(subset=['cliente'], keep='first')
+
+# Aplica mapeamento de vendedores
 seller_map_norm = {str(k).strip(): str(v).strip() for k, v in seller_map.items()}
 df_filtered['Vendedor'] = df_filtered['cliente'].map(seller_map_norm).fillna("").astype(str)
 
 # --- 3. EDITOR VENDEDORES ---
 st.subheader(f"Vínculo de Vendedores - {periodo_sel}")
+st.caption(f"Exibindo {len(df_filtered)} clientes únicos (registros duplicados foram filtrados automaticamente, mantendo o mais recente).")
+
 df_edit = df_filtered[['cliente', 'valor_total', 'terminais_cheio', 'terminais_proporcional', 'Vendedor']].copy()
 df_edit.columns = ['Cliente', 'Faturamento Total', 'Terminais Base', 'Ativações', 'Vendedor']
 
@@ -135,12 +147,14 @@ else:
 
     results = []
     
+    # Itera sobre o DataFrame FILTRADO (sem duplicatas)
     for idx, row in df_filtered.iterrows():
         client = str(row['cliente']).strip()
         seller = temp_seller_map.get(client, "")
         if not seller: continue
 
         itens = row.get('itens_detalhados', None)
+        # Bônus apenas se tiver sido calculado no faturamento
         bonus_total = float(row.get('terminais_proporcional', 0)) * bonus_val
         comissao_cliente = 0.0
         base_calculo_cliente = 0.0
@@ -151,15 +165,17 @@ else:
                 tipo = str(item.get('Tipo', 'GPRS')).strip().upper()
                 valor_faturado_item = float(item.get('Valor a Faturar', 0.0))
                 
-                # Procura a base do estoque para o modelo, senão usa GPRS padrão
+                # Preço Base do Estoque
                 base_estoque = base_prices.get(tipo, base_prices['GPRS']) 
                 taxa = get_tier(valor_faturado_item, base_estoque)
                 
                 comissao_cliente += valor_faturado_item * taxa
                 base_calculo_cliente += valor_faturado_item
         else:
-            # Fallback para dados antigos
+            # Fallback
             val_gprs = float(row.get('valor_unitario_gprs', 0))
+            # Se não tem detalhe, tentamos calcular a taxa média baseada no valor unitário GPRS salvo
+            # (Assumindo que a maioria é GPRS para cálculo estimado)
             rate_gprs = get_tier(val_gprs, base_prices['GPRS'])
             fat_total = float(row.get('valor_total', 0))
             comissao_cliente = fat_total * rate_gprs
