@@ -1,50 +1,57 @@
 # 1_Home.py
 import streamlit as st
-from firebase_config import auth_client, db
+import auth_functions as auth
+from firebase_config import db
 
-st.set_page_config(page_title="Login Uzzipay Financeiro", page_icon="", layout="centered")
+st.set_page_config(page_title="Verdio Financeiro", page_icon="imgs/v-c.png", layout="centered")
 
-st.title("Sistema Financeiro Uzzipay")
+# CSS para limpar o topo padrão do Streamlit na home
+st.markdown("""
+<style>
+    [data-testid="stHeader"] {visibility: hidden;}
+    [data-testid="stSidebar"] {display: none;}
+</style>
+""", unsafe_allow_html=True)
 
-# --- Lógica de Login ---
-if 'user_info' in st.session_state:
-    user_email = st.session_state['user_info']['email']
-    st.success(f"Login realizado com sucesso como **{user_email}**.")
-    st.info(f"Nível de acesso: **{st.session_state.get('role', 'Usuário')}**")
+# Layout Centralizado
+st.markdown("<br><br>", unsafe_allow_html=True) # Espaço topo
+col1, col2, col3 = st.columns([1, 2, 1])
+
+with col2:
+    st.image("imgs/logo.png", use_container_width=True)
+    st.markdown("<h3 style='text-align: center; color: #555;'>Acesso ao Sistema</h3>", unsafe_allow_html=True)
     
-    if st.button("Logout"):
-        # Limpa todas as chaves da sessão para um logout completo
-        for key in list(st.session_state.keys()):
-            del st.session_state[key]
-        st.rerun()
-    st.stop()
+    with st.form("login_form"):
+        email = st.text_input("E-mail Corporativo")
+        password = st.text_input("Senha", type="password")
+        submit = st.form_submit_button("Entrar", type="primary", use_container_width=True)
 
-# Formulário de login
-with st.form("login_form"):
-    email = st.text_input("E-mail")
-    password = st.text_input("Senha", type="password")
-    submit_button = st.form_submit_button("Entrar")
-
-    if submit_button:
+    if submit:
         if not email or not password:
-            st.error("Por favor, preencha todos os campos.")
+            st.warning("Preencha todos os campos.")
         else:
-            try:
-                user = auth_client.sign_in_with_email_and_password(email, password)
-                st.session_state['user_info'] = user
-                
-                uid = user['localId']
-                user_doc = db.collection('users').document(uid).get()
+            with st.spinner("Autenticando..."):
+                user, info = auth.login_user(email, password)
+                if user:
+                    st.session_state['user_info'] = user
+                    
+                    # Buscar dados extras do usuário no Firestore
+                    try:
+                        user_doc = db.collection("users").document(email).get()
+                        if user_doc.exists:
+                            user_data = user_doc.to_dict()
+                            st.session_state['role'] = user_data.get('role', 'Usuário')
+                            st.session_state['name'] = user_data.get('name', email.split('@')[0])
+                        else:
+                            st.session_state['role'] = 'Admin' # Fallback para primeiro acesso
+                            st.session_state['name'] = email.split('@')[0]
+                    except:
+                        st.session_state['role'] = 'Usuário'
+                        st.session_state['name'] = 'Colaborador'
 
-                if user_doc.exists:
-                    st.session_state['role'] = user_doc.to_dict().get('role', 'Usuário')
+                    st.toast("Login realizado com sucesso!", icon="✅")
+                    st.switch_page("pages/94_Gestao_Estoque.py") # Redireciona para uma página útil
                 else:
-                    st.session_state['role'] = 'Usuário'
+                    st.error(f"Falha no login: {info}")
 
-                # Adiciona o nome do usuário à sessão para ser usado nas outras páginas
-                st.session_state['name'] = user['email'].split('@')[0].capitalize()
-                
-                st.rerun()
-
-            except Exception as e:
-                st.error("E-mail ou senha inválidos. Verifique suas credenciais.")
+    st.markdown("<div style='text-align: center; margin-top: 20px; color: #888; font-size: 0.8em;'>Verdio Soluções Financeiras v2.0</div>", unsafe_allow_html=True)
