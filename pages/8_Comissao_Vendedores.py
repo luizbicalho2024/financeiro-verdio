@@ -53,7 +53,6 @@ def save_seller_mappings(mapping_data):
         return False
 
 def get_commission_settings():
-    """Busca configurações globais de comissão (ex: valor do bônus)."""
     try:
         doc = db.collection("settings").document("commission_rules").get()
         if doc.exists: return doc.to_dict()
@@ -81,9 +80,9 @@ with st.expander("⚙️ Regras de Comissão e Bônus", expanded=True):
     col_info, col_bonus = st.columns([2, 1])
     
     with col_info:
-        st.info("ℹ️ **Cálculo Automático:** A base de cálculo utiliza o **'Preço 1'** definido na página de **Gestão de Estoque**.")
+        st.info("ℹ️ **Cálculo Baseado no Valor do Terminal:** A comissão incide sobre a soma dos valores unitários dos terminais ativos (Recorrência Cheia), desconsiderando descontos de pró-rata da fatura.")
         st.markdown("""
-        **Regra de Escalonamento (Sobre o Valor Faturado):**
+        **Regra de Escalonamento (Sobre o Preço Unitário Cobrado vs Estoque):**
         - 🔴 **0%** se valor cobrado < 80% do Preço 1 do Estoque.
         - 🟠 **2%** se valor cobrado entre **80% e 99%** do Preço 1.
         - 🟢 **15%** se valor cobrado entre **100% e 119%** do Preço 1.
@@ -108,7 +107,6 @@ history_data = umdb.get_billing_history()
 pricing_config = umdb.get_pricing_config().get("TIPO_EQUIPAMENTO", {})
 
 # Extrair Preços Base (Price 1) para comparação
-# Verifica se é dict ou float para evitar erros
 def get_price1(price_data):
     if isinstance(price_data, dict):
         return float(price_data.get("price1", 0.0))
@@ -127,7 +125,7 @@ seller_map = get_seller_mappings()
 df = pd.DataFrame(history_data)
 
 # Tratamento de Tipos e Strings
-cols_num = ['valor_total', 'terminais_cheio', 'terminais_proporcional', 
+cols_num = ['valor_total', 'terminais_cheio', 'terminais_proporcional', 'terminais_suspensos',
             'terminais_gprs', 'terminais_satelitais', 
             'valor_unitario_gprs', 'valor_unitario_satelital']
 
@@ -137,7 +135,7 @@ for col in cols_num:
     else:
         df[col] = 0.0
 
-# Limpeza de strings para garantir o match
+# Limpeza de strings
 df['cliente'] = df['cliente'].astype(str).str.strip()
 
 # Tratamento de Datas
@@ -162,7 +160,6 @@ with col_filt1:
 df_filtered = df[df['mes_ano'] == periodo_selecionado].copy()
 
 # Aplica o vendedor salvo no banco ao dataframe atual
-# Normaliza as chaves do mapa para garantir match
 seller_map_normalized = {str(k).strip(): str(v).strip() for k, v in seller_map.items()}
 df_filtered['Vendedor'] = df_filtered['cliente'].map(seller_map_normalized).fillna("").astype(str)
 
@@ -173,7 +170,7 @@ st.markdown("Atribua os vendedores aos clientes abaixo e clique em Salvar.")
 df_to_edit = df_filtered[['cliente', 'valor_total', 'terminais_cheio', 'terminais_proporcional', 'Vendedor']].copy()
 df_to_edit = df_to_edit.rename(columns={
     'cliente': 'Cliente', 
-    'valor_total': 'Faturamento (R$)', 
+    'valor_total': 'Faturamento (Nota)', 
     'terminais_cheio': 'Terminais Base', 
     'terminais_proporcional': 'Ativações'
 })
@@ -183,12 +180,12 @@ edited_df = st.data_editor(
     df_to_edit,
     column_config={
         "Cliente": st.column_config.TextColumn(disabled=True),
-        "Faturamento (R$)": st.column_config.NumberColumn(format="R$ %.2f", disabled=True),
+        "Faturamento (Nota)": st.column_config.NumberColumn(format="R$ %.2f", disabled=True),
         "Terminais Base": st.column_config.NumberColumn(disabled=True),
         "Ativações": st.column_config.NumberColumn(disabled=True),
         "Vendedor": st.column_config.TextColumn("Vendedor Responsável")
     },
-    width="stretch", # Corrigido para versão nova do Streamlit
+    width="stretch", 
     hide_index=True, 
     num_rows="fixed",
     key="editor_vendedores"
@@ -196,7 +193,6 @@ edited_df = st.data_editor(
 
 # Botão Salvar
 if st.button("💾 Salvar Vínculos", type="primary"):
-    # Cria dicionário garantindo limpeza de espaços
     current_mappings = {}
     for index, row in edited_df.iterrows():
         cli = str(row['Cliente']).strip()
@@ -204,7 +200,6 @@ if st.button("💾 Salvar Vínculos", type="primary"):
         if cli and vend:
             current_mappings[cli] = vend
     
-    # Mescla com o que já existia no banco para não perder outros clientes
     full_map = seller_map.copy()
     full_map.update(current_mappings)
     
@@ -212,25 +207,19 @@ if st.button("💾 Salvar Vínculos", type="primary"):
         st.cache_data.clear()
         st.rerun()
 
-# --- 4. CÁLCULO DA COMISSÃO ---
+# --- 4. CÁLCULO DA COMISSÃO (AJUSTADO: EM CIMA DO TERMINAL) ---
 st.markdown("---"); st.subheader("📊 Relatório de Comissões Calculado")
 
-# Verifica se existe algum vendedor preenchido no editor ATUAL
 has_sellers = edited_df['Vendedor'].str.strip().astype(bool).any()
 
 if not has_sellers:
     st.info("👆 Preencha a coluna 'Vendedor Responsável' acima e salve para ver os cálculos.")
 else:
-    # Cria mapa temporário baseado no que está na tela agora
-    # Isso garante que o cálculo use o que o usuário acabou de digitar, mesmo antes de recarregar do banco
     temp_seller_map = {str(r['Cliente']).strip(): str(r['Vendedor']).strip() for _, r in edited_df.iterrows()}
 
-    # Função da Regra de Negócio
     def get_tier_percentage(billed_price, base_price):
         if base_price <= 0 or billed_price <= 0: return 0.0
-        
         ratio = billed_price / base_price
-        
         if 0.80 <= ratio <= 0.99: return 0.02  # 2%
         if 1.00 <= ratio <= 1.19: return 0.15  # 15%
         if ratio >= 1.20: return 0.30          # 30%
@@ -238,59 +227,62 @@ else:
 
     results = []
     
-    # Itera sobre o DataFrame original filtrado (que tem os dados detalhados de GPRS/Satélite)
     for idx, row in df_filtered.iterrows():
         client_name = str(row['cliente']).strip()
-        
-        # Tenta pegar o vendedor do mapa da tela, se não tiver, pega do dataframe
         seller = temp_seller_map.get(client_name, "")
-        
-        if not seller:
-            continue
+        if not seller: continue
             
         total_invoice = row['valor_total']
         
-        # Dados GPRS
-        count_gprs = row['terminais_gprs']
+        # --- LÓGICA DE BASE DE COMISSÃO (Base Cheia por Terminal) ---
+        
+        # 1. Recuperar Contagens Totais
+        total_gprs = row['terminais_gprs']
+        total_sat = row['terminais_satelitais']
+        total_suspensos = row.get('terminais_suspensos', 0)
+        
+        total_terminals = total_gprs + total_sat
+        
+        # 2. Descontar Suspensos (Estimativa Proporcional pois o histórico não separa GPRS/SAT suspenso)
+        # Se 10% dos terminais são suspensos, reduzimos 10% da base GPRS e 10% da base SAT
+        active_ratio = 1.0
+        if total_terminals > 0:
+            active_ratio = (total_terminals - total_suspensos) / total_terminals
+            
+        active_gprs = total_gprs * active_ratio
+        active_sat = total_sat * active_ratio
+        
+        # 3. Calcular Base de Comissão (Valor Unitário x Quantidade Ativa)
+        # Isso ignora se o cliente pagou pró-rata na nota. Paga-se sobre o valor "Cheio" do contrato ativo.
         price_gprs_billed = row['valor_unitario_gprs']
-        base_gprs = base_prices.get('GPRS', 59.90) # Preço 1 do Estoque
-        
-        # Dados Satélite
-        count_sat = row['terminais_satelitais']
         price_sat_billed = row['valor_unitario_satelital']
-        base_sat = base_prices.get('SATELITE', 159.90) # Preço 1 do Estoque
         
-        # Pesos para rateio do valor total da nota
-        weight_gprs = count_gprs * price_gprs_billed
-        weight_sat = count_sat * price_sat_billed
-        total_weight = weight_gprs + weight_sat
+        base_comm_gprs = active_gprs * price_gprs_billed
+        base_comm_sat = active_sat * price_sat_billed
         
-        comm_gprs = 0.0
-        comm_sat = 0.0
+        base_comm_total = base_comm_gprs + base_comm_sat
         
-        # Cálculo Proporcional
-        if total_weight > 0:
-            # Quanto da nota fiscal corresponde a GPRS e Satélite (proporcionalmente)
-            revenue_gprs_real = total_invoice * (weight_gprs / total_weight)
-            revenue_sat_real = total_invoice * (weight_sat / total_weight)
-            
-            # Percentuais baseados na regra 80/100/120%
-            rate_gprs = get_tier_percentage(price_gprs_billed, base_gprs)
-            rate_sat = get_tier_percentage(price_sat_billed, base_sat)
-            
-            comm_gprs = revenue_gprs_real * rate_gprs
-            comm_sat = revenue_sat_real * rate_sat
+        # 4. Determinar % (Tier)
+        base_gprs_stock = base_prices.get('GPRS', 59.90)
+        base_sat_stock = base_prices.get('SATELITE', 159.90)
         
+        rate_gprs = get_tier_percentage(price_gprs_billed, base_gprs_stock)
+        rate_sat = get_tier_percentage(price_sat_billed, base_sat_stock)
+        
+        # 5. Calcular Comissão Final
+        comm_gprs = base_comm_gprs * rate_gprs
+        comm_sat = base_comm_sat * rate_sat
         total_comm = comm_gprs + comm_sat
         
-        # Bônus por Ativação (Configurado no topo da página)
+        # Bônus
         bonus_val = comm_settings.get("bonus_ativacao", 50.00)
         bonus_total = row['terminais_proporcional'] * bonus_val
         
         results.append({
             'Vendedor': seller,
             'Cliente': client_name,
-            'Faturamento': total_invoice,
+            'Base Comissão (R$)': base_comm_total,
+            'Faturamento Nota (R$)': total_invoice,
             'Comissao': total_comm,
             'Bônus Ativação': bonus_total,
             'Total a Pagar': total_comm + bonus_total
@@ -299,33 +291,30 @@ else:
     df_results = pd.DataFrame(results)
 
     if not df_results.empty:
-        # Agrupamento por Vendedor
         resumo = df_results.groupby('Vendedor').agg({
             'Cliente': 'count',
-            'Faturamento': 'sum',
+            'Base Comissão (R$)': 'sum',
             'Comissao': 'sum',
             'Bônus Ativação': 'sum',
             'Total a Pagar': 'sum'
         }).reset_index().rename(columns={'Cliente': 'Qtd Clientes'})
 
-        # Cards de Totais
         c1, c2, c3 = st.columns(3)
         c1.metric("Total Geral a Pagar", f"R$ {resumo['Total a Pagar'].sum():,.2f}")
-        c2.metric("Total Comissões", f"R$ {resumo['Comissao'].sum():,.2f}")
-        c3.metric("Total Bônus", f"R$ {resumo['Bônus Ativação'].sum():,.2f}")
+        c2.metric("Comissões (Recorrência)", f"R$ {resumo['Comissao'].sum():,.2f}")
+        c3.metric("Bônus (Ativação)", f"R$ {resumo['Bônus Ativação'].sum():,.2f}")
 
         st.markdown("### Resumo por Vendedor")
         st.dataframe(
             resumo, width="stretch", hide_index=True,
             column_config={
-                "Faturamento": st.column_config.NumberColumn(format="R$ %.2f"),
+                "Base Comissão (R$)": st.column_config.NumberColumn(format="R$ %.2f", help="Soma dos valores cheios dos terminais ativos (ignorando pró-rata)"),
                 "Comissao": st.column_config.NumberColumn(format="R$ %.2f"),
                 "Bônus Ativação": st.column_config.NumberColumn(format="R$ %.2f"),
                 "Total a Pagar": st.column_config.NumberColumn(format="R$ %.2f"),
             }
         )
 
-        # Exportação Excel
         def to_excel(df1, df2):
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine='openpyxl') as writer:
