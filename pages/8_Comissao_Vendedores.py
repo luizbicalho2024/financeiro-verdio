@@ -43,13 +43,13 @@ def save_seller_mappings(mapping_data):
 def get_commission_settings():
     try:
         doc = db.collection("settings").document("commission_rules").get()
-        return doc.to_dict() if doc.exists else {"bonus_ativacao": 50.00}
-    except: return {"bonus_ativacao": 50.00}
+        return doc.to_dict() if doc.exists else {"bonus_ativacao": 50.00, "base_price_table": "price3"}
+    except: return {"bonus_ativacao": 50.00, "base_price_table": "price3"}
 
 def save_commission_settings(data):
     try:
         db.collection("settings").document("commission_rules").set(data, merge=True)
-        st.toast("Regras salvas!", icon="✅")
+        st.toast("Configurações salvas!", icon="✅")
         return True
     except: return False
 
@@ -57,29 +57,32 @@ def save_commission_settings(data):
 st.title("💰 Apuração de Comissões (Analítica)")
 st.markdown("Cálculo detalhado terminal a terminal comparando Faturamento vs. Tabela de Preço.")
 
-# --- 1. CONFIGURAÇÕES ---
+# --- 1. CONFIGURAÇÕES E REGRAS ---
 comm_rules = get_commission_settings()
 pricing_config = umdb.get_pricing_config().get("TIPO_EQUIPAMENTO", {})
 
-# Função para extrair o Preço 1 (Base)
-def get_base_price_stock(equip_type):
-    # Padroniza a chave (GPRS, SATELITE, etc)
+# Mapeamento para interface amigável
+price_options = {"price1": "Preço 1 (Mínimo)", "price2": "Preço 2 (Médio)", "price3": "Preço 3 (Padrão)"}
+reverse_price_options = {v: k for k, v in price_options.items()}
+
+# Função para extrair o Preço Base dinâmico
+def get_base_price_stock(equip_type, price_key='price3'):
     etype = str(equip_type).strip().upper()
-    # Busca na config
     data = pricing_config.get(etype, None)
     
-    # Se não achar direto, tenta fallback comuns
+    # Fallback se não encontrar o tipo exato
     if data is None:
         if "SAT" in etype: data = pricing_config.get("SATELITE", {})
-        else: data = pricing_config.get("GPRS", {}) # Padrão
+        else: data = pricing_config.get("GPRS", {}) 
     
-    # Retorna o price1
-    if isinstance(data, dict): return float(data.get("price1", 0.0))
-    if isinstance(data, (float, int)): return float(data)
+    # Retorna o preço da tabela selecionada (1, 2 ou 3)
+    if isinstance(data, dict): return float(data.get(price_key, 0.0))
+    if isinstance(data, (float, int)): return float(data) # Compatibilidade antiga
     return 0.0
 
 with st.expander("⚙️ Parâmetros de Cálculo", expanded=False):
-    c1, c2 = st.columns([2,1])
+    c1, c2, c3 = st.columns([1.5, 1, 1])
+    
     with c1:
         st.markdown("""
         **Regra de Faixa (Valor Cobrado / Valor Base):**
@@ -88,10 +91,29 @@ with st.expander("⚙️ Parâmetros de Cálculo", expanded=False):
         - 100% a 119%: **15%** de comissão.
         - >= 120%: **30%** de comissão.
         """)
+    
     with c2:
+        # Seletor da Tabela Base (Padrão Preço 3)
+        current_table_key = comm_rules.get("base_price_table", "price3")
+        current_table_label = price_options.get(current_table_key, "Preço 3 (Padrão)")
+        
+        selected_table_label = st.selectbox(
+            "Tabela Base para Cálculo (100%)",
+            options=list(price_options.values()),
+            index=list(price_options.values()).index(current_table_label),
+            help="Define qual preço do estoque será usado como denominador para calcular a % atingida."
+        )
+        selected_table_key = reverse_price_options[selected_table_label]
+
+    with c3:
         bonus_input = st.number_input("Bônus por Ativação (R$)", value=float(comm_rules.get("bonus_ativacao", 50.0)), step=10.0)
-        if st.button("Atualizar Bônus"):
-            save_commission_settings({"bonus_ativacao": bonus_input})
+        
+        st.write("") # Espaçamento
+        if st.button("💾 Salvar Parâmetros"):
+            save_commission_settings({
+                "bonus_ativacao": bonus_input,
+                "base_price_table": selected_table_key
+            })
             st.rerun()
 
 # --- 2. DADOS E FILTROS ---
@@ -112,17 +134,12 @@ periodos = sorted(df_hist['mes_ano'].unique(), reverse=True)
 sel_periodo = st.selectbox("Selecione o Mês de Competência:", periodos)
 
 # --- 3. DEDUPLICAÇÃO E VÍNCULO ---
-# Filtra pelo mês
 df_month = df_hist[df_hist['mes_ano'] == sel_periodo].copy()
-# Ordena por data (mais recente primeiro) e remove duplicatas de cliente
 df_month = df_month.sort_values('data_geracao', ascending=False).drop_duplicates(subset=['cliente'], keep='first')
 
-# Carrega Vendedores
 seller_map = get_seller_mappings()
-# Normaliza chaves para evitar erros de espaço
 seller_map_norm = {str(k).strip(): str(v).strip() for k, v in seller_map.items()}
 
-# Aplica Vendedor
 df_month['cliente_norm'] = df_month['cliente'].astype(str).str.strip()
 df_month['Vendedor'] = df_month['cliente_norm'].map(seller_map_norm).fillna("")
 
@@ -151,15 +168,12 @@ with st.expander("Clique para atribuir vendedores aos clientes", expanded=True):
 # --- 4. MOTOR DE CÁLCULO DETALHADO ---
 st.markdown("---")
 st.subheader("2. Relatório de Comissões")
+st.caption(f"Base de Cálculo utilizada: **{price_options.get(selected_table_key)}**")
 
-# Atualiza mapa temporário com o que está na tela
 temp_map = {str(r['Cliente']).strip(): str(r['Vendedor']).strip() for _, r in edited.iterrows()}
+summary_rows = []
+detailed_rows = []
 
-# Listas para armazenar resultados
-summary_rows = []   # Resumo por Vendedor
-detailed_rows = []  # Linha a linha de cada terminal
-
-# Função da Regra
 def get_tier_percent(billed, base):
     if base <= 0: return 0.0
     ratio = billed / base
@@ -168,74 +182,53 @@ def get_tier_percent(billed, base):
     if ratio <= 1.19: return 0.15
     return 0.30  # >= 1.20
 
-# Loop Principal
 for _, row in df_month.iterrows():
     client = str(row['cliente']).strip()
     seller = temp_map.get(client, "")
     
-    if not seller: continue # Pula clientes sem vendedor
+    if not seller: continue
     
-    # Verifica se existem detalhes salvos (Novo sistema)
     details = row.get('itens_detalhados', [])
-    
     client_comm_total = 0.0
     client_bonus_total = 0.0
     
     if details and isinstance(details, list) and len(details) > 0:
-        # --- CÁLCULO PRECISO (ITEM A ITEM) ---
         for item in details:
-            # Ignora suspensos para comissão
             cat = item.get('Categoria', '')
-            if cat == 'Suspenso':
-                continue
+            if cat == 'Suspenso': continue
             
-            # Dados do Item
             term_id = item.get('Terminal') or item.get('Nº Equipamento') or 'N/A'
             tipo = item.get('Tipo', 'GPRS')
             val_faturado = float(item.get('Valor a Faturar', 0.0))
             
-            # Busca Preço Base no Estoque
-            base_price = get_base_price_stock(tipo)
+            # --- USO DA CHAVE DE PREÇO DINÂMICA (price1, price2 ou price3) ---
+            base_price = get_base_price_stock(tipo, selected_table_key)
             
-            # Calcula Faixa
             pct = get_tier_percent(val_faturado, base_price)
             comm_val = val_faturado * pct
             
-            # Verifica Bônus (se for Proporcional/Ativação)
-            is_bonus = 0.0
-            # Lógica: Se for 'Ativado no Mês' ou 'Proporcional' (dependendo de como foi salvo)
-            if 'Ativado' in cat or 'Proporcional' in str(item): # Ajuste conforme nomenclatura salva
-                is_bonus = bonus_input
-            
-            # No faturamento verdio a gente usa 'terminais_proporcional' no total, 
-            # mas item a item podemos deduzir. Vamos usar o totalizador do cliente para bônus para ser mais seguro.
-            
             client_comm_total += comm_val
             
-            # Adiciona à lista analítica
             detailed_rows.append({
                 "Vendedor": seller,
                 "Cliente": client,
                 "Terminal": term_id,
                 "Tipo": tipo,
                 "Valor Faturado": val_faturado,
-                "Valor Base (Estoque)": base_price,
+                "Valor Base": base_price,
                 "% Aplicado": pct,
                 "Comissão (R$)": comm_val
             })
             
-        # Bônus Total do Cliente (mais seguro pegar do contador salvo)
         qtd_ativacoes = float(row.get('terminais_proporcional', 0))
         client_bonus_total = qtd_ativacoes * bonus_input
         
     else:
-        # --- FALLBACK (DADOS ANTIGOS SEM DETALHE) ---
-        # Faz uma estimativa baseada nos totais
+        # Fallback para dados antigos
         val_total = float(row.get('valor_total', 0))
-        # Pega preço GPRS padrão como base
-        base_gprs = get_base_price_stock("GPRS")
-        # Estima taxa média (assumindo GPRS)
-        # Nota: Impossível ser preciso sem detalhes, assume 2% conservador se não tiver dados
+        base_gprs = get_base_price_stock("GPRS", selected_table_key)
+        # Estimativa simples (sem detalhe não dá pra saber o range exato)
+        # Assumimos uma taxa conservadora ou média se não tiver detalhe
         taxa_est = 0.02 
         comm_val = val_total * taxa_est
         
@@ -248,12 +241,11 @@ for _, row in df_month.iterrows():
             "Terminal": "RESUMO (S/ DETALHE)",
             "Tipo": "-",
             "Valor Faturado": val_total,
-            "Valor Base (Estoque)": base_gprs,
+            "Valor Base": base_gprs,
             "% Aplicado": taxa_est,
             "Comissão (R$)": comm_val
         })
 
-    # Adiciona ao resumo
     summary_rows.append({
         "Vendedor": seller,
         "Cliente": client,
@@ -264,14 +256,12 @@ for _, row in df_month.iterrows():
     })
 
 # --- 5. VISUALIZAÇÃO ---
-
 if not summary_rows:
     st.info("Nenhum dado calculado. Verifique se os vendedores estão atribuídos.")
 else:
     df_summary = pd.DataFrame(summary_rows)
     df_detailed = pd.DataFrame(detailed_rows)
     
-    # 5.1 KPIs Gerais
     st.markdown("### Totais Gerais")
     k1, k2, k3 = st.columns(3)
     total_geral = df_summary["Total a Pagar"].sum()
@@ -279,7 +269,6 @@ else:
     k2.metric("Comissões", f"R$ {df_summary['Comissão Recorrência'].sum():,.2f}")
     k3.metric("Bônus", f"R$ {df_summary['Bônus Ativação'].sum():,.2f}")
     
-    # 5.2 Tabela Resumo (Agrupada por Vendedor)
     st.markdown("### Resumo por Vendedor")
     df_group = df_summary.groupby("Vendedor").agg({
         "Cliente": "count",
@@ -300,22 +289,18 @@ else:
         hide_index=True, use_container_width=True
     )
     
-    # 5.3 Tabela Analítica (Item a Item) - O PEDIDO PRINCIPAL
-    st.markdown("### 🔎 Relatório Analítico (Terminal a Terminal)")
-    st.markdown("Lista completa de todos os terminais processados, comparando o valor cobrado com o valor de estoque.")
-    
+    st.markdown(f"### 🔎 Relatório Analítico (Base: {price_options.get(selected_table_key)})")
     st.dataframe(
         df_detailed,
         column_config={
             "Valor Faturado": st.column_config.NumberColumn(format="R$ %.2f"),
-            "Valor Base (Estoque)": st.column_config.NumberColumn(format="R$ %.2f"),
-            "% Aplicado": st.column_config.NumberColumn(format="%.0f%%"), # Mostra como porcentagem (ex: 15%)
+            "Valor Base": st.column_config.NumberColumn(format="R$ %.2f"),
+            "% Aplicado": st.column_config.NumberColumn(format="%.0f%%"),
             "Comissão (R$)": st.column_config.NumberColumn(format="R$ %.2f"),
         },
         hide_index=True, use_container_width=True
     )
     
-    # 5.4 Exportação
     def to_excel_full(df_resumo, df_clientes, df_analitico):
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
