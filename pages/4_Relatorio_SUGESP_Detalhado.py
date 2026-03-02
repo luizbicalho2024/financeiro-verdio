@@ -34,6 +34,14 @@ if st.sidebar.button("Logout"):
 
 # --- 2. FUNÇÕES DE LÓGICA ---
 
+def formatar_moeda_br(valor):
+    """Formata um valor float para o padrão monetário brasileiro (ex: 1.234,56)"""
+    if valor is None:
+        return "0,00"
+    valor_formatado = f"{float(valor):,.2f}"
+    # Substitui vírgulas temporárias por X, pontos por vírgulas, e X por pontos
+    return valor_formatado.replace(",", "X").replace(".", ",").replace("X", ".")
+
 @st.cache_data(ttl=300)
 def buscar_dados_api(token, endpoint):
     """Função genérica para buscar dados de um endpoint da API."""
@@ -87,7 +95,7 @@ def buscar_transacoes_em_partes(token, data_inicio, data_fim, chunk_days=7):
 
 def processar_relatorio_com_base_nas_transacoes(faturas, transacoes, empenhos, contratos, produtos, dados_bancarios, info_empresa, data_inicio, taxa_adicional, vencimento_manual, status_selecionados):
     """
-    LÓGICA APRIMORADA: Gera relatórios filtrando pelo status da transação.
+    LÓGICA APRIMORADA: Gera relatórios filtrando pelo status da transação com formatação ABNT.
     """
     mapa_produtos = {p['id']: p['nome'] for p in produtos}
     mapa_contratos = {c['id']: c for c in contratos}
@@ -158,7 +166,7 @@ def processar_relatorio_com_base_nas_transacoes(faturas, transacoes, empenhos, c
                 empenhos_usados_ids.add(t['empenho_id'])
         
         partes_consumo = [
-            f"Combustível: {produto} | Valor Bruto: R$ {valores['valor_bruto']:,.2f} | Soma de VLR IRRF: R$ {valores['irrf']:,.2f}"
+            f"Combustível: {produto} | Valor Bruto: R$ {formatar_moeda_br(valores['valor_bruto'])} | Soma de VLR IRRF: R$ {formatar_moeda_br(valores['irrf'])}"
             for produto, valores in sorted(consumo_por_produto.items())
         ]
         consumo_str = " | ".join(partes_consumo)
@@ -182,10 +190,10 @@ def processar_relatorio_com_base_nas_transacoes(faturas, transacoes, empenhos, c
 
         texto_relatorio = (
             f"({nome_secretaria}) | "
-            f"Valor Bruto: R$ {valor_bruto:,.2f} | "
-            f"Taxa Negativa: -R$ {taxa_negativa:,.2f} | "
-            f"Valor Líquido: R$ {valor_liquido_final:,.2f} | "
-            f"IR Retido: R$ {ir_retido:,.2f} | "
+            f"Valor Bruto: R$ {formatar_moeda_br(valor_bruto)} | "
+            f"Taxa Negativa: -R$ {formatar_moeda_br(taxa_negativa)} | "
+            f"Valor Líquido: R$ {formatar_moeda_br(valor_liquido_final)} | "
+            f"IR Retido: R$ {formatar_moeda_br(ir_retido)} | "
             f"Período: {periodo} | "
             f"Empenho: {empenhos_str} | "
             f"Vencimento: {vencimento} | "
