@@ -95,7 +95,7 @@ def buscar_transacoes_em_partes(token, data_inicio, data_fim, chunk_days=7):
 
 def processar_relatorio_com_base_nas_transacoes(faturas, transacoes, empenhos, contratos, produtos, dados_bancarios, info_empresa, data_inicio, taxa_adicional, vencimento_manual, status_selecionados):
     """
-    LÓGICA APRIMORADA: Gera relatórios filtrando pelo status da transação com formatação ABNT.
+    LÓGICA APRIMORADA: Gera relatórios filtrando pelo status da transação com formatação ABNT e tratamentos de None.
     """
     mapa_produtos = {p['id']: p['nome'] for p in produtos}
     mapa_contratos = {c['id']: c for c in contratos}
@@ -109,18 +109,36 @@ def processar_relatorio_com_base_nas_transacoes(faturas, transacoes, empenhos, c
 
     CNPJ_PRINCIPAL = "03693136000112"
 
-    # Filtra transações pelo status selecionado pelo usuário
-    transacoes_sugesp = [
-        t for t in transacoes 
-        if t.get('informacao', {}).get('cliente', {}).get('cnpj') == CNPJ_PRINCIPAL and t.get('status') in status_selecionados
-    ]
+    # Filtra transações pelo status de forma segura evitando AttributeError
+    transacoes_sugesp = []
+    for t in transacoes:
+        if not isinstance(t, dict):
+            continue
+            
+        informacao = t.get('informacao') or {}
+        if not isinstance(informacao, dict): informacao = {}
+        
+        cliente = informacao.get('cliente') or {}
+        if not isinstance(cliente, dict): cliente = {}
+        
+        if cliente.get('cnpj') == CNPJ_PRINCIPAL and t.get('status') in status_selecionados:
+            transacoes_sugesp.append(t)
+
     if not transacoes_sugesp:
         st.warning(f"Nenhuma transação com os status selecionados ({', '.join(status_selecionados)}) foi encontrada para o cliente SUGESP no período.")
         return []
 
     secretarias = defaultdict(list)
     for t in transacoes_sugesp:
-        grupo_info = t.get('informacao', {}).get('search', {}).get('grupo', {})
+        informacao = t.get('informacao') or {}
+        if not isinstance(informacao, dict): informacao = {}
+        
+        search = informacao.get('search') or {}
+        if not isinstance(search, dict): search = {}
+        
+        grupo_info = search.get('grupo') or {}
+        if not isinstance(grupo_info, dict): grupo_info = {}
+        
         if grupo_info and 'nome' in grupo_info:
             nome_secretaria = grupo_info['nome']
             secretarias[nome_secretaria].append(t)
@@ -132,7 +150,7 @@ def processar_relatorio_com_base_nas_transacoes(faturas, transacoes, empenhos, c
         ano_referencia = data_inicio.year
         fatura_geral = next((
             f for f in faturas 
-            if f.get('cliente') and f['cliente']['cnpj'] == CNPJ_PRINCIPAL and f.get('mes_referencia') == mes_referencia and f.get('ano_referencia') == ano_referencia
+            if isinstance(f, dict) and isinstance(f.get('cliente'), dict) and f['cliente'].get('cnpj') == CNPJ_PRINCIPAL and f.get('mes_referencia') == mes_referencia and f.get('ano_referencia') == ano_referencia
         ), None)
 
         if not fatura_geral:
