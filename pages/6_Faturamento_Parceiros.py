@@ -265,7 +265,7 @@ def create_pdf_parceiro(nome_parceiro, periodo, totais, df_final):
 
 
 # --- INTERFACE DO USUÁRIO ---
-st.title("🏢 Gestão e Faturamento de Filiais")
+st.title("Gestão e Faturamento de Filiais")
 
 tab1, tab2 = st.tabs(["📊 Processar Faturamento", "⚙️ Regras e Campanhas (Configuração)"])
 
