@@ -3,7 +3,7 @@ import sys
 import os
 import re
 import io
-from datetime import datetime
+from datetime import datetime, date
 import pandas as pd
 import numpy as np
 from fpdf import FPDF
@@ -140,7 +140,7 @@ def processar_planilha_parceiro(file_bytes, regra_parceiro, terminais_registrado
         dias_a_faturar = np.where(df['Categoria'].isin(['Suspenso', 'Cheio']), df['Dias Ativos Mês'] - df['Suspenso Dias Mes'], dias_a_faturar)
         df['Dias a Faturar'] = np.clip(dias_a_faturar, 0, None)
         
-        # --- APLICAÇÃO DA REGRA DE NEGÓCIO (COTA E PRAZO) ---
+        # --- APLICAÇÃO DA REGRA DE NEGÓCIO (COTA, PRAZO E DATA DE ATIVAÇÃO) ---
         valores_unitarios = []
         status_promocao = []
         terminais_novos_para_registrar = []
@@ -150,6 +150,10 @@ def processar_planilha_parceiro(file_bytes, regra_parceiro, terminais_registrado
         preco_promo = regra_parceiro.get("preco_promocional", 0.0)
         preco_normal = regra_parceiro.get("preco_normal", 0.0)
         nome_parceiro = regra_parceiro.get("nome", "")
+        
+        # Datas da promoção convertidas para date object para comparação
+        data_inicio_promo = pd.to_datetime(regra_parceiro.get("data_inicio_promo", "1900-01-01")).date()
+        data_fim_promo = pd.to_datetime(regra_parceiro.get("data_fim_promo", "2100-01-01")).date()
         
         cota_atual = len(terminais_registrados)
 
@@ -162,6 +166,8 @@ def processar_planilha_parceiro(file_bytes, regra_parceiro, terminais_registrado
                 valores_unitarios.append(preco_normal)
                 status_promocao.append("Sem Data Ativação")
                 continue
+
+            data_ativacao_dt = data_ativacao.date()
 
             # Verifica se já está registrado na base de promoções deste parceiro
             if terminal in terminais_registrados:
@@ -176,15 +182,20 @@ def processar_planilha_parceiro(file_bytes, regra_parceiro, terminais_registrado
                     valores_unitarios.append(preco_normal)
                     status_promocao.append("Prazo Promocional Expirado")
             else:
-                # Terminal novo, verifica se ainda tem cota
-                if cota_atual < cota_maxima:
-                    valores_unitarios.append(preco_promo)
-                    status_promocao.append("Nova Promoção Aplicada")
-                    terminais_novos_para_registrar.append((terminal, data_ativacao))
-                    cota_atual += 1
+                # Terminal novo, verifica se a data de ativação está dentro do período promocional
+                if data_inicio_promo <= data_ativacao_dt <= data_fim_promo:
+                    # Verifica se ainda tem cota
+                    if cota_atual < cota_maxima:
+                        valores_unitarios.append(preco_promo)
+                        status_promocao.append("Nova Promoção Aplicada")
+                        terminais_novos_para_registrar.append((terminal, data_ativacao))
+                        cota_atual += 1
+                    else:
+                        valores_unitarios.append(preco_normal)
+                        status_promocao.append("Cota Promocional Esgotada")
                 else:
                     valores_unitarios.append(preco_normal)
-                    status_promocao.append("Cota Promocional Esgotada")
+                    status_promocao.append("Fora do Período da Promoção")
 
         df['Valor Unitario'] = valores_unitarios
         df['Status Promoção'] = status_promocao
@@ -274,11 +285,18 @@ with tab2:
         preco_promocional = c4.number_input("Preço Promocional (R$)", min_value=0.0, value=20.0, format="%.2f")
         meses_duracao = c5.number_input("Duração da Promoção (Meses)", min_value=1, value=12, step=1)
         
+        st.markdown("##### Período de Validade para Entrar na Promoção")
+        c6, c7 = st.columns(2)
+        data_inicio_promo = c6.date_input("Data Início (Ativações a partir de)", value=date(2026, 3, 1))
+        data_fim_promo = c7.date_input("Data Fim (Ativações até)", value=date(2026, 4, 30))
+        
         submit_regra = st.form_submit_button("Salvar Regra da Filial")
         
         if submit_regra:
             if not nome_parceiro:
                 st.warning("O nome da filial é obrigatório.")
+            elif data_inicio_promo > data_fim_promo:
+                st.error("A Data de Início não pode ser maior que a Data de Fim.")
             else:
                 dados = {
                     "nome": nome_parceiro.strip(),
@@ -286,6 +304,8 @@ with tab2:
                     "preco_normal": preco_normal,
                     "preco_promocional": preco_promocional,
                     "meses_duracao": meses_duracao,
+                    "data_inicio_promo": data_inicio_promo.strftime("%Y-%m-%d"),
+                    "data_fim_promo": data_fim_promo.strftime("%Y-%m-%d"),
                     "ultima_atualizacao": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 }
                 if save_regra_parceiro(nome_parceiro.strip(), dados):
@@ -296,6 +316,10 @@ with tab2:
         st.markdown("---")
         st.subheader("Filiais Cadastradas")
         df_regras = pd.DataFrame(list(regras_cadastradas.values()))
+        # Convertendo as datas para um formato mais legível na tabela (opcional)
+        if 'data_inicio_promo' in df_regras.columns:
+            df_regras['data_inicio_promo'] = pd.to_datetime(df_regras['data_inicio_promo']).dt.strftime('%d/%m/%Y')
+            df_regras['data_fim_promo'] = pd.to_datetime(df_regras['data_fim_promo']).dt.strftime('%d/%m/%Y')
         st.dataframe(df_regras, use_container_width=True, hide_index=True)
 
 
@@ -308,7 +332,11 @@ with tab1:
         filial_selecionada = st.selectbox("Selecione a Filial para Faturamento", options=list(regras_cadastradas.keys()))
         regra_atual = regras_cadastradas[filial_selecionada]
         
-        st.info(f"**Regra Ativa:** Cota de {regra_atual['cota_maxima']} veículos a R$ {regra_atual['preco_promocional']:,.2f} durante {regra_atual['meses_duracao']} meses. Valor normal: R$ {regra_atual['preco_normal']:,.2f}.")
+        # Formatação de datas para exibição na interface
+        dt_inicio = datetime.strptime(regra_atual.get('data_inicio_promo', '1900-01-01'), '%Y-%m-%d').strftime('%d/%m/%Y')
+        dt_fim = datetime.strptime(regra_atual.get('data_fim_promo', '2100-01-01'), '%Y-%m-%d').strftime('%d/%m/%Y')
+        
+        st.info(f"**Regra Ativa:** Cota de {regra_atual['cota_maxima']} veículos a R$ {regra_atual['preco_promocional']:,.2f} durante {regra_atual['meses_duracao']} meses.\n\n**Período Promocional:** {dt_inicio} até {dt_fim} \n\n**Valor normal:** R$ {regra_atual['preco_normal']:,.2f}.")
         
         uploaded_file = st.file_uploader(f"Selecione o relatório (.xlsx) exportado para a {filial_selecionada}", type=['xlsx'])
         
