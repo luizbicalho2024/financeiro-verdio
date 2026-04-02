@@ -26,7 +26,7 @@ if st.sidebar.button("Voltar para Home"):
     st.switch_page("1_Home.py")
 
 st.title("📊 Resumo de Faturamento Mensal")
-st.markdown("Esta página processa a planilha global e calcula o faturamento bruto baseado no histórico de preços de cada cliente.")
+st.markdown("Esta página processa a planilha global e calcula o faturamento bruto baseado no histórico de cada cliente.")
 
 # --- FUNÇÕES DE PROCESSAMENTO ---
 def extrair_periodo(file_bytes):
@@ -44,7 +44,9 @@ def extrair_periodo(file_bytes):
     return "Período não identificado", datetime.now().month, datetime.now().year
 
 def calcular_faturamento_cliente(df_cliente, report_month, report_year, inventory, default_pricing):
-    # Identifica o cliente para buscar histórico
+    if df_cliente.empty:
+        return 0.0
+    
     nome_cliente = df_cliente['Cliente'].iloc[0]
     
     # Busca preços históricos no banco de dados
@@ -57,32 +59,39 @@ def calcular_faturamento_cliente(df_cliente, report_month, report_year, inventor
     else:
         prices = default_pricing
 
-    # Prepara dados
+    # Prepara inventário
     df_inv = pd.DataFrame(inventory)
-    df_merged = pd.merge(df_cliente, df_inv, left_on='Equipamento', right_on='Nº Equipamento', how='left')
+    
+    # --- CORREÇÃO DO ERRO DE MERGE: Forçar tipo string e limpar espaços ---
+    df_cliente['Nº Equipamento'] = df_cliente['Nº Equipamento'].astype(str).str.strip()
+    df_inv['Nº Equipamento'] = df_inv['Nº Equipamento'].astype(str).str.strip()
+    
+    df_merged = pd.merge(df_cliente, df_inv, on='Nº Equipamento', how='left')
     
     # Datas e Dias
     dias_no_mes = pd.Timestamp(year=report_year, month=report_month, day=1).days_in_month
     df_merged['Data Ativação'] = pd.to_datetime(df_merged['Data Ativação'], errors='coerce', dayfirst=True)
     df_merged['Data Desativação'] = pd.to_datetime(df_merged['Data Desativação'], errors='coerce', dayfirst=True)
     
-    # Lógica Proporcional (Simplificada para o resumo)
+    # Atribui preço baseado no tipo (GPRS/SATELITE)
     df_merged['Valor Unitario'] = df_merged['Tipo'].map(prices).fillna(0)
     
-    conditions = [
-        (df_merged['Data Desativação'].notna()),
-        (df_merged['Data Ativação'].dt.month == report_month) & (df_merged['Data Ativação'].dt.year == report_year),
-        (df_merged['Condição'].str.strip() == 'Suspenso')
-    ]
+    # Lógica Proporcional Exata do financeiro-verdio
+    # Mapeia colunas para evitar erros de acentuação na planilha
+    suspenso_col = 'Suspenso Dias Mês' if 'Suspenso Dias Mês' in df_merged.columns else 'Suspenso Dias Mes'
+    dias_ativos_col = 'Dias Ativos Mês' if 'Dias Ativos Mês' in df_merged.columns else 'Dias Ativos Mes'
+
+    dias_a_faturar = np.where(
+        df_merged['Data Desativação'].notna(), 
+        df_merged['Data Desativação'].dt.day - df_merged[suspenso_col].fillna(0),
+        np.where(
+            (df_merged['Data Ativação'].dt.month == report_month) & (df_merged['Data Ativação'].dt.year == report_year), 
+            (dias_no_mes - df_merged['Data Ativação'].dt.day + 1) - df_merged[suspenso_col].fillna(0),
+            df_merged[dias_ativos_col].fillna(0) - df_merged[suspenso_col].fillna(0)
+        )
+    )
     
-    # Dias a faturar
-    dias = np.where(df_merged['Data Desativação'].notna(), 
-                    df_merged['Data Desativação'].dt.day - df_merged['Suspenso Dias Mês'].fillna(0),
-           np.where((df_merged['Data Ativação'].dt.month == report_month), 
-                    (dias_no_mes - df_merged['Data Ativação'].dt.day + 1) - df_merged['Suspenso Dias Mês'].fillna(0),
-                    df_merged['Dias Ativos Mês'].fillna(0) - df_merged['Suspenso Dias Mês'].fillna(0)))
-    
-    df_merged['Valor Calculado'] = (df_merged['Valor Unitario'] / dias_no_mes) * np.clip(dias, 0, None)
+    df_merged['Valor Calculado'] = (df_merged['Valor Unitario'] / dias_no_mes) * np.clip(dias_a_faturar, 0, None)
     
     return df_merged['Valor Calculado'].sum()
 
@@ -90,20 +99,21 @@ def calcular_faturamento_cliente(df_cliente, report_month, report_year, inventor
 uploaded_file = st.file_uploader("Suba a planilha global de terminais (.xlsx)", type=['xlsx'])
 
 if uploaded_file:
-    with st.spinner("Processando dados e consultando histórico..."):
+    with st.spinner("Calculando faturamento global..."):
         file_bytes = uploaded_file.getvalue()
         tracker_inventory = umdb.get_tracker_inventory()
         pricing_config = umdb.get_pricing_config().get("TIPO_EQUIPAMENTO", {})
         
-        # Ajusta dicionário de preços padrão
+        # Preços padrão do sistema
         default_prices = {}
         for k, v in pricing_config.items():
             default_prices[k] = v.get("price1", 0) if isinstance(v, dict) else v
 
         periodo_texto, m, y = extrair_periodo(file_bytes)
         
-        # Lê a planilha a partir da linha 12 (conforme padrão do sistema)
-        df_geral = pd.read_excel(io.BytesIO(file_bytes), header=11)
+        # Lê a planilha forçando 'Equipamento' como string e renomeando para o padrão interno
+        df_geral = pd.read_excel(io.BytesIO(file_bytes), header=11, dtype={'Equipamento': str})
+        df_geral = df_geral.rename(columns={'Equipamento': 'Nº Equipamento'})
         df_geral = df_geral.dropna(subset=['Cliente', 'Terminal'])
 
         resumo_dados = []
@@ -120,16 +130,14 @@ if uploaded_file:
             })
 
         # Exibição dos Resultados
-        df_resumo = pd.DataFrame(resumo_dados)
+        df_resumo = pd.DataFrame(resumo_dados).sort_values(by="Cliente")
         
-        st.subheader(f"Resultados para: {periodo_texto}")
+        st.subheader(f"Resumo Processado: {periodo_texto}")
         
-        # Métricas de topo
         c1, c2 = st.columns(2)
         c1.metric("Total de Clientes", len(df_resumo))
-        c2.metric("Valor Global Estimado", f"R$ {df_resumo['Bruto Total (R$)'].sum():,.2f}")
+        c2.metric("Valor Total Global", f"R$ {df_resumo['Bruto Total (R$)'].sum():,.2f}")
 
-        # Tabela Final
         st.dataframe(
             df_resumo,
             column_config={
@@ -139,13 +147,12 @@ if uploaded_file:
             hide_index=True
         )
 
-        # Opção de download
         csv = df_resumo.to_csv(index=False).encode('utf-8-sig')
         st.download_button(
-            label="📥 Baixar Resumo em CSV",
+            label="📥 Baixar Tabela de Faturamento (CSV)",
             data=csv,
-            file_name=f"Resumo_Faturamento_{y}_{m}.csv",
+            file_name=f"Resumo_Geral_Verdio_{y}_{m}.csv",
             mime="text/csv",
         )
 else:
-    st.info("Aguardando upload da planilha para gerar o faturamento bruto de todos os clientes.")
+    st.info("Suba o relatório de terminais para gerar a listagem de faturamento por cliente.")
