@@ -231,20 +231,50 @@ if uploaded_file:
             with st.expander("⚠️ Equipamentos Não Encontrados no Estoque", expanded=True):
                 st.warning("Os seguintes equipamentos não foram encontrados no estoque e não serão faturados."); st.json(not_found)
 
-        df_cheio = df_final[df_final['Categoria'] == 'Cheio'].copy()
-        df_ativados = df_final[df_final['Categoria'] == 'Ativado no Mês'].copy()
-        df_desativados = df_final[df_final['Categoria'] == 'Desativado'].copy()
-        df_suspensos = df_final[df_final['Categoria'] == 'Suspenso'].copy()
+        # --- SEÇÃO DE REVISÃO INTERATIVA (NOVO) ---
+        st.subheader("Revisão de Terminais")
+        st.info("Desmarque a caixa **'Faturar?'** para remover um terminal do cálculo e do relatório deste mês. Os cálculos abaixo serão atualizados automaticamente.")
+        
+        # Adiciona a coluna booleana de controle, caso não exista
+        if 'Faturar' not in df_final.columns:
+            df_final.insert(0, 'Faturar', True)
+            
+        # Editor interativo do Streamlit
+        edited_df = st.data_editor(
+            df_final,
+            column_config={
+                "Faturar": st.column_config.CheckboxColumn("Faturar?", default=True),
+                "Terminal": st.column_config.TextColumn(disabled=True),
+                "Nº Equipamento": st.column_config.TextColumn(disabled=True),
+                "Modelo": st.column_config.TextColumn(disabled=True),
+                "Tipo": st.column_config.TextColumn(disabled=True),
+                "Categoria": st.column_config.TextColumn(disabled=True),
+                "Valor a Faturar": st.column_config.NumberColumn(format="R$ %.2f", disabled=True),
+            },
+            hide_index=True,
+            use_container_width=True,
+            key="editor_revisao_terminais"
+        )
+        
+        # Filtra o DataFrame mantendo apenas os terminais marcados pelo usuário
+        df_aprovado = edited_df[edited_df['Faturar'] == True].copy()
+        
+        # Recategoriza usando o DataFrame aprovado
+        df_cheio = df_aprovado[df_aprovado['Categoria'] == 'Cheio'].copy()
+        df_ativados = df_aprovado[df_aprovado['Categoria'] == 'Ativado no Mês'].copy()
+        df_desativados = df_aprovado[df_aprovado['Categoria'] == 'Desativado'].copy()
+        df_suspensos = df_aprovado[df_aprovado['Categoria'] == 'Suspenso'].copy()
         
         total_cheio = df_cheio['Valor a Faturar'].sum()
         total_proporcional = df_ativados['Valor a Faturar'].sum() + df_desativados['Valor a Faturar'].sum() + df_suspensos['Valor a Faturar'].sum()
         total_geral = total_cheio + total_proporcional
 
+        st.markdown("---")
         st.header("Resumo do Faturamento"); st.subheader(f"Cliente: {nome_cliente}"); st.caption(f"Período: {periodo_relatorio}")
         num_prop = len(df_ativados) + len(df_desativados)
         c1, c2, c3, c4, c5 = st.columns(5)
         c1.metric("Nº Fat. Cheio", len(df_cheio)); c2.metric("Nº Fat. Proporcional", num_prop); c3.metric("Nº Suspensos", len(df_suspensos))
-        c4.metric("Total GPRS", len(df_final[df_final['Tipo'] == 'GPRS'])); c5.metric("Total Satelitais", len(df_final[df_final['Tipo'] == 'SATELITE']))
+        c4.metric("Total GPRS", len(df_aprovado[df_aprovado['Tipo'] == 'GPRS'])); c5.metric("Total Satelitais", len(df_aprovado[df_aprovado['Tipo'] == 'SATELITE']))
         c1, c2, c3 = st.columns(3)
         c1.success(f"**Faturamento (Cheio):** R$ {total_cheio:,.2f}"); c2.warning(f"**Faturamento (Proporcional):** R$ {total_proporcional:,.2f}"); c3.info(f"**FATURAMENTO TOTAL:** R$ {total_geral:,.2f}")
         
@@ -252,18 +282,18 @@ if uploaded_file:
         
         # --- PREPARAÇÃO DOS DADOS DETALHADOS PARA SALVAR NO BANCO ---
         cols_to_save = ['Terminal', 'Nº Equipamento', 'Modelo', 'Tipo', 'Categoria', 'Valor Unitario', 'Valor a Faturar', 'Dias a Faturar']
-        detalhes_itens = df_final[cols_to_save].to_dict(orient='records')
+        detalhes_itens = df_aprovado[cols_to_save].to_dict(orient='records')
         
         excel_data = to_excel(df_cheio, df_ativados, df_desativados, df_suspensos)
         
         log_data = {
             "cliente": nome_cliente, "periodo_relatorio": periodo_relatorio, "valor_total": total_geral, 
             "terminais_cheio": len(df_cheio), "terminais_proporcional": num_prop, "terminais_suspensos": len(df_suspensos), 
-            "terminais_gprs": len(df_final[df_final['Tipo'] == 'GPRS']), "terminais_satelitais": len(df_final[df_final['Tipo'] == 'SATELITE']), 
+            "terminais_gprs": len(df_aprovado[df_aprovado['Tipo'] == 'GPRS']), "terminais_satelitais": len(df_aprovado[df_aprovado['Tipo'] == 'SATELITE']), 
             "valor_unitario_gprs": prices.get("GPRS", 0), "valor_unitario_satelital": prices.get("SATELITE", 0)
         }
         
-        pdf_data = create_pdf_report(nome_cliente, periodo_relatorio, {"cheio": total_cheio, "proporcional": total_proporcional, "geral": total_geral, "terminais_cheio": len(df_cheio), "terminais_proporcional": num_prop, "terminais_suspensos": len(df_suspensos), "terminais_gprs": len(df_final[df_final['Tipo'] == 'GPRS']), "terminais_satelitais": len(df_final[df_final['Tipo'] == 'SATELITE'])}, df_cheio, df_ativados, df_desativados, df_suspensos)
+        pdf_data = create_pdf_report(nome_cliente, periodo_relatorio, {"cheio": total_cheio, "proporcional": total_proporcional, "geral": total_geral, "terminais_cheio": len(df_cheio), "terminais_proporcional": num_prop, "terminais_suspensos": len(df_suspensos), "terminais_gprs": len(df_aprovado[df_aprovado['Tipo'] == 'GPRS']), "terminais_satelitais": len(df_aprovado[df_aprovado['Tipo'] == 'SATELITE'])}, df_cheio, df_ativados, df_desativados, df_suspensos)
         
         c1, c2 = st.columns(2)
         c1.download_button("📥 Exportar Excel e Salvar Histórico", excel_data, f"Faturamento_{nome_cliente.replace(' ', '_')}_{datetime.now().strftime('%Y-%m')}.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", on_click=umdb.log_faturamento, args=(log_data, detalhes_itens))
@@ -271,7 +301,7 @@ if uploaded_file:
 
         st.markdown("---")
         
-        # --- EXIBIÇÃO DAS TABELAS (CORRIGIDO: TODAS AS TABELAS VOLTARAM) ---
+        # --- EXIBIÇÃO DAS TABELAS DETALHADAS ---
         cols_to_show = ['Terminal', 'Nº Equipamento', 'Modelo', 'Tipo', 'Data Ativação', 'Dias Ativos Mês', 'Suspenso Dias Mes', 'Dias a Faturar', 'Valor Unitario', 'Valor a Faturar']
         
         with st.expander("Detalhamento do Faturamento Cheio"):
