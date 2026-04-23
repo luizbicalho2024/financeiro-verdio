@@ -122,10 +122,10 @@ def processar_planilha_lote(file_bytes, file_name, tracker_inventory, global_pri
         else:
             df_raw = pd.read_excel(io.BytesIO(file_bytes), header=None, engine='openpyxl')
 
-        # Buscar data do relatório no cabeçalho bruto
+        # Buscar data do relatório no cabeçalho bruto (agora à prova de floats/NaNs)
         report_date = None
         for i in range(min(20, len(df_raw))):
-            row_str = " ".join(df_raw.iloc[i].astype(str).tolist())
+            row_str = " ".join([str(val) for val in df_raw.iloc[i].tolist()])
             match = re.search(r'Data Final:\s*(\d{2}[-/]\d{2}[-/]\d{4})', row_str)
             if match:
                 start_date_str = match.group(1).replace('-', '/')
@@ -135,7 +135,7 @@ def processar_planilha_lote(file_bytes, file_name, tracker_inventory, global_pri
         # Encontrar a linha real do cabeçalho da tabela
         header_row_idx = None
         for i in range(min(30, len(df_raw))):
-            row_vals = df_raw.iloc[i].astype(str).tolist()
+            row_vals = [str(val) for val in df_raw.iloc[i].tolist()]
             if any('Cliente' in val for val in row_vals) and any('Terminal' in val for val in row_vals):
                 header_row_idx = i
                 break
