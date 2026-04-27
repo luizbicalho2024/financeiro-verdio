@@ -113,7 +113,7 @@ def create_pdf_report(nome_cliente, periodo, totais, df_cheio, df_ativados, df_d
     return bytes(pdf.output(dest='S').encode('latin-1', errors='replace'))
 
 @st.cache_data
-def processar_planilha_lote(file_bytes, file_name, tracker_inventory, global_prices):
+def processar_planilha_lote(file_bytes, file_name, tracker_inventory):
     try:
         meses_pt = {"January": "Janeiro", "February": "Fevereiro", "March": "Março", "April": "Abril", "May": "Maio", "June": "Junho", "July": "Julho", "August": "Agosto", "September": "Setembro", "October": "Outubro", "November": "Novembro", "December": "Dezembro"}
         
@@ -164,9 +164,9 @@ def processar_planilha_lote(file_bytes, file_name, tracker_inventory, global_pri
         if not report_date:
             report_date = datetime.now()
 
-        report_month, report_year = report_date.month, report_date.year
-        dias_no_mes = pd.Timestamp(year=report_year, month=report_month, day=1).days_in_month
-        periodo_relatorio = f"{meses_pt.get(report_date.strftime('%B'), report_date.strftime('%B'))} de {report_year}"
+        report_month, report_date_year = report_date.month, report_date.year
+        dias_no_mes = pd.Timestamp(year=report_date_year, month=report_month, day=1).days_in_month
+        periodo_relatorio = f"{meses_pt.get(report_date.strftime('%B'), report_date.strftime('%B'))} de {report_date_year}"
         
         # Cruzamento com Estoque
         df_inventory = pd.DataFrame(tracker_inventory)
@@ -205,7 +205,7 @@ def processar_planilha_lote(file_bytes, file_name, tracker_inventory, global_pri
         # Regras de Categoria
         conditions = [
             (df_merged['Data Desativação'].notna()),
-            (df_merged['Data Ativação'].dt.month == report_month) & (df_merged['Data Ativação'].dt.year == report_year),
+            (df_merged['Data Ativação'].dt.month == report_month) & (df_merged['Data Ativação'].dt.year == report_date_year),
             (df_merged['Condição'].astype(str).str.strip().str.lower() == 'suspenso')
         ]
         choices = ['Desativado', 'Ativado no Mês', 'Suspenso']
@@ -284,7 +284,7 @@ def create_zip_of_pdfs(df_aprovado, periodo_relatorio):
             
     return zip_buffer.getvalue()
 
-def salvar_historico_lote(df_aprovado, periodo_relatorio, global_prices):
+def salvar_historico_lote(df_aprovado, periodo_relatorio):
     for cliente in df_aprovado['Cliente'].unique():
         df_cliente = df_aprovado[df_aprovado['Cliente'] == cliente]
         
@@ -293,7 +293,7 @@ def salvar_historico_lote(df_aprovado, periodo_relatorio, global_prices):
         terminais_suspensos = len(df_cliente[df_cliente['Categoria'] == 'Suspenso'])
         terminais_prop = len(df_cliente) - terminais_cheio - terminais_suspensos
         
-        # Recupera preço para log (tenta pegar do dataframe se existir, senão global)
+        # Recupera preço para log (tenta pegar do dataframe se existir, senão assume 0)
         preco_gprs = df_cliente[df_cliente['Tipo'] == 'GPRS']['Valor Unitario'].max()
         preco_sat = df_cliente[df_cliente['Tipo'] == 'SATELITE']['Valor Unitario'].max()
         
@@ -306,8 +306,8 @@ def salvar_historico_lote(df_aprovado, periodo_relatorio, global_prices):
             "terminais_suspensos": terminais_suspensos, 
             "terminais_gprs": len(df_cliente[df_cliente['Tipo'] == 'GPRS']), 
             "terminais_satelitais": len(df_cliente[df_cliente['Tipo'] == 'SATELITE']), 
-            "valor_unitario_gprs": preco_gprs if pd.notna(preco_gprs) else global_prices.get("GPRS", 0), 
-            "valor_unitario_satelital": preco_sat if pd.notna(preco_sat) else global_prices.get("SATELITE", 0)
+            "valor_unitario_gprs": preco_gprs if pd.notna(preco_gprs) else 0.0, 
+            "valor_unitario_satelital": preco_sat if pd.notna(preco_sat) else 0.0
         }
         
         cols_to_save = ['Terminal', 'Nº Equipamento', 'Modelo', 'Tipo', 'Categoria', 'Valor Unitario', 'Valor a Faturar', 'Dias a Faturar']
@@ -317,23 +317,13 @@ def salvar_historico_lote(df_aprovado, periodo_relatorio, global_prices):
         
     st.session_state['lote_salvo'] = True
 
-# --- 4. INPUTS DE CONFIGURAÇÃO GLOBAIS ---
-st.sidebar.header("Valores Padrão Globais")
-st.sidebar.info("Estes valores serão usados caso o cliente não tenha um histórico de preços salvo.")
-pricing_config = umdb.get_pricing_config().get("TIPO_EQUIPAMENTO", {})
-prices = {}
-for equip_type in sorted(pricing_config.keys()):
-    val = pricing_config.get(equip_type, 0.0)
-    if isinstance(val, dict): val = val.get("price1", 0.0)
-    prices[equip_type] = st.sidebar.number_input(f"Preço {equip_type}", min_value=0.0, value=float(val), format="%.2f")
-
-# --- 5. UPLOAD DO FICHEIRO ---
+# --- 4. UPLOAD DO FICHEIRO ---
 st.subheader("Processamento de Faturamento em Lote (Múltiplos Clientes)")
 st.info("Carregue o arquivo consolidado de terminais. O sistema processará todos os clientes de uma vez, aplicando os preços adequados baseados no histórico de Contratos.")
 uploaded_file = st.file_uploader("Selecione o relatório consolidado", type=['xlsx', 'csv'])
 st.markdown("---")
 
-# --- 6. ANÁLISE E EXIBIÇÃO ---
+# --- 5. ANÁLISE E EXIBIÇÃO ---
 if uploaded_file:
     tracker_inventory = umdb.get_tracker_inventory()
     if not tracker_inventory:
@@ -343,7 +333,7 @@ if uploaded_file:
     file_name = uploaded_file.name
     
     with st.spinner('Processando dados de todos os clientes...'):
-        periodo_relatorio, df_final, not_found, error = processar_planilha_lote(file_bytes, file_name, tracker_inventory, prices)
+        periodo_relatorio, df_final, not_found, error = processar_planilha_lote(file_bytes, file_name, tracker_inventory)
 
     if error:
         st.error(error)
@@ -432,7 +422,7 @@ if uploaded_file:
         
         if col3.button("💾 Salvar Histórico de Todos no Banco", type="primary"):
             with st.spinner("Salvando históricos..."):
-                salvar_historico_lote(df_aprovado, periodo_relatorio, prices)
+                salvar_historico_lote(df_aprovado, periodo_relatorio)
             
         if st.session_state.get('lote_salvo'):
             st.success("✅ O faturamento de todos os clientes foi registrado no banco de dados com sucesso!")
