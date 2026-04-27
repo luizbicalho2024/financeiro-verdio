@@ -68,14 +68,16 @@ def delete_contract(cliente_id):
 
 # --- CARREGAMENTO DE DADOS ---
 contratos = get_contracts()
-# Puxa os modelos dinâmicos diretamente do estoque
-model_types = umdb.get_unique_models_and_types() 
-if not model_types:
-    model_types = {"Nenhum Modelo Encontrado": "GPRS"} # Fallback
+
+# Puxa os tipos de equipamento globais (GPRS, SATELITE, etc.) do banco
+pricing_config = umdb.get_pricing_config()
+tipos_equipamento = list(pricing_config.get("TIPO_EQUIPAMENTO", {}).keys())
+if not tipos_equipamento:
+    tipos_equipamento = ["GPRS", "SATELITE", "CAMERA", "RADIO"] # Fallback
 
 # --- INTERFACE PRINCIPAL ---
 st.title("📝 Gestão de Contratos e Preços por Cliente")
-st.markdown("Controle o termo de adesão, vencimento contratual e os valores personalizados cobrados por cada **modelo de equipamento**.")
+st.markdown("Controle o termo de adesão, vencimento contratual e os valores personalizados cobrados por cada **Tipo de Equipamento**.")
 
 tab1, tab2 = st.tabs(["➕ Novo / Editar Contrato", "📋 Lista de Contratos Vigentes"])
 
@@ -115,19 +117,19 @@ with tab1:
                 st.info(f"**Vencimento do Contrato:**\n\n🎯 {vencimento.strftime('%d/%m/%Y')}")
 
             st.markdown("---")
-            st.markdown("### 💰 Valores Personalizados por Modelo de Rastreador")
-            st.caption("Insira os valores acordados para este cliente por cada modelo. Deixe zerado (0.00) caso não haja preço específico.")
+            st.markdown("### 💰 Valores Personalizados por Tipo de Equipamento")
+            st.caption("Insira os valores acordados para este cliente por cada tipo (GPRS, Satélite, etc.). Deixe zerado (0.00) caso não haja preço específico para o tipo.")
             
-            precos_atuais = dados_atuais.get("precos_por_modelo", {})
+            precos_atuais = dados_atuais.get("precos_por_tipo", {})
             
-            # Renderiza inputs de forma dinâmica de acordo com os modelos em estoque
+            # Renderiza inputs de forma dinâmica de acordo com os tipos baseados no estoque/configuração
             cols = st.columns(4)
             idx = 0
             novos_precos = {}
-            for modelo in sorted(model_types.keys()):
-                val_atual = float(precos_atuais.get(modelo, 0.0))
+            for tipo in sorted(tipos_equipamento):
+                val_atual = float(precos_atuais.get(tipo, 0.0))
                 with cols[idx % 4]:
-                    novos_precos[modelo] = st.number_input(f"{modelo} (R$)", min_value=0.0, value=val_atual, format="%.2f", key=f"preco_{modelo}")
+                    novos_precos[tipo] = st.number_input(f"{tipo} (R$)", min_value=0.0, value=val_atual, format="%.2f", key=f"preco_{tipo}")
                 idx += 1
 
             st.markdown("<br>", unsafe_allow_html=True)
@@ -143,7 +145,7 @@ with tab1:
                         "ultima_atualizacao_termo": data_atualizacao.strftime("%Y-%m-%d"),
                         "prazo_contrato_meses": int(prazo_meses),
                         "vencimento_contrato": vencimento.strftime("%Y-%m-%d"),
-                        "precos_por_modelo": novos_precos,
+                        "precos_por_tipo": novos_precos,
                         "atualizado_em": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     }
                     if save_contract(nome_cliente.strip(), dados_salvar):
@@ -164,7 +166,7 @@ with tab2:
             status = "🟢 Vigente" if venc >= hoje else "🔴 Vencido"
             
             # Formata os preços maiores que zero para exibição no resumo da tabela
-            precos_ativos = [f"{m}: R${p:.2f}" for m, p in v.get("precos_por_modelo", {}).items() if p > 0]
+            precos_ativos = [f"{m}: R${p:.2f}" for m, p in v.get("precos_por_tipo", {}).items() if p > 0]
             resumo_precos = " | ".join(precos_ativos) if precos_ativos else "Nenhum valor fixo"
 
             lista_tabela.append({
@@ -173,13 +175,13 @@ with tab2:
                 "Prazo (Meses)": v.get("prazo_contrato_meses"),
                 "Vencimento": venc.strftime("%d/%m/%Y"),
                 "Status": status,
-                "Preços (Modelos)": resumo_precos
+                "Preços": resumo_precos
             })
         
         # Exibe como um DataFrame interativo do Streamlit
         df_contratos = pd.DataFrame(lista_tabela)
         
-        # Opcional: ordenar pelo vencimento mais próximo
+        # Ordenar pelo vencimento mais próximo
         df_contratos['Vencimento_Date'] = pd.to_datetime(df_contratos['Vencimento'], format='%d/%m/%Y')
         df_contratos = df_contratos.sort_values(by='Vencimento_Date').drop(columns=['Vencimento_Date'])
         
