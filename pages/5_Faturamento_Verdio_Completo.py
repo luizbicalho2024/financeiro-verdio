@@ -1,4 +1,4 @@
-# pages/10_Faturamento_Lote.py
+# pages/5_Faturamento_Verdio_Completo.py
 import sys
 import os
 import re
@@ -9,6 +9,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 import streamlit as st
 import pandas as pd
 from datetime import datetime
+from firebase_config import db
 import user_management_db as umdb
 from fpdf import FPDF
 import numpy as np
@@ -176,23 +177,28 @@ def processar_planilha_lote(file_bytes, file_name, tracker_inventory, global_pri
         df_merged = pd.merge(df, df_inventory, on='Nº Equipamento', how='left')
         not_found_equip = df_merged[df_merged['Tipo'].isna()]['Nº Equipamento'].unique().tolist()
         
-        # --- PRECIFICAÇÃO INTELIGENTE POR CLIENTE ---
-        # Busca o último faturamento de cada cliente para aplicar preços personalizados automaticamente
+        # --- PRECIFICAÇÃO BASEADA EM CONTRATOS ---
+        # Busca os contratos para aplicar os preços negociados. 0.0 caso não exista contrato
+        try:
+            docs = db.collection("client_contracts").stream()
+            contratos_db = {doc.id: doc.to_dict() for doc in docs}
+        except Exception as e:
+            contratos_db = {}
+            st.error(f"Erro ao buscar contratos: {e}")
+
         client_prices = {}
         for cliente in df_merged['Cliente'].unique():
-            last_billing = umdb.get_last_billing_for_client(cliente)
-            if last_billing:
-                client_prices[cliente] = {
-                    "GPRS": last_billing.get("valor_unitario_gprs", global_prices.get("GPRS", 0)),
-                    "SATELITE": last_billing.get("valor_unitario_satelital", global_prices.get("SATELITE", 0))
-                }
+            contrato_cliente = contratos_db.get(cliente)
+            if contrato_cliente and 'precos_por_tipo' in contrato_cliente:
+                client_prices[cliente] = contrato_cliente['precos_por_tipo']
             else:
-                client_prices[cliente] = global_prices.copy()
+                # Cliente sem contrato cadastrado recebe valor 0
+                client_prices[cliente] = {}
                 
         def get_price(row):
             c = row['Cliente']
             t = row['Tipo']
-            return client_prices.get(c, {}).get(t, 0.0)
+            return float(client_prices.get(c, {}).get(t, 0.0))
 
         df_merged['Valor Unitario'] = df_merged.apply(get_price, axis=1)
 
@@ -323,7 +329,7 @@ for equip_type in sorted(pricing_config.keys()):
 
 # --- 5. UPLOAD DO FICHEIRO ---
 st.subheader("Processamento de Faturamento em Lote (Múltiplos Clientes)")
-st.info("Carregue o arquivo consolidado de terminais. O sistema processará todos os clientes de uma vez, aplicando os preços adequados baseados no histórico.")
+st.info("Carregue o arquivo consolidado de terminais. O sistema processará todos os clientes de uma vez, aplicando os preços adequados baseados no histórico de Contratos.")
 uploaded_file = st.file_uploader("Selecione o relatório consolidado", type=['xlsx', 'csv'])
 st.markdown("---")
 
