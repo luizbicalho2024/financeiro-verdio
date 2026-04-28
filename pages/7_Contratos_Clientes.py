@@ -77,7 +77,7 @@ if not tipos_equipamento:
     tipos_equipamento = ["GPRS", "SATELITE", "CAMERA", "RADIO"] # Fallback
 
 # --- INTERFACE PRINCIPAL ---
-st.title("📝 Gestão de Contratos e Preços por Cliente")
+st.title("COMERCIAL - Gestão de Contratos Verdio")
 st.markdown("Controle o termo de adesão, vencimento contratual e os valores personalizados cobrados por cada **Tipo de Equipamento**.")
 
 # Invertemos a ordem das abas aqui para que a Lista seja a principal
