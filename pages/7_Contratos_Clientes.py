@@ -6,7 +6,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 import streamlit as st
 import pandas as pd
 from datetime import datetime
-import plotly.express as px
+import altair as alt  # Altair já vem nativo no Streamlit, evitando erros de ModuleNotFoundError
 from firebase_config import db
 import user_management_db as umdb
 
@@ -117,7 +117,10 @@ try:
                 with st.container(border=True):
                     c1, c2, c3, c4 = st.columns([2, 1, 1, 1])
                     c1.markdown(f"**{row['cliente']}**")
-                    c2.markdown(f"Venc: {row['data_vencimento']}")
+                    
+                    data_venc_raw = row.get('data_vencimento')
+                    venc_str = pd.to_datetime(data_venc_raw).strftime('%d/%m/%Y') if data_venc_raw else "S/ Data"
+                    c2.markdown(f"Venc: {venc_str}")
                     c3.markdown(row['status'])
                     
                     # Botões de Ação
@@ -142,30 +145,27 @@ try:
 
         with col_grafico:
             st.markdown("### Status dos Contratos")
+            
             # Contagem de status para o gráfico
             status_counts = df_contracts['status'].value_counts().reset_index()
             status_counts.columns = ['Status', 'Quantidade']
             
-            # Cores personalizadas
-            color_map = {
-                "🟢 Vigente": "#22c55e",
-                "🔴 Vencido": "#ef4444",
-                "⚪ S/ Data": "#94a3b8"
-            }
+            # Gráfico de Rosca nativo com Altair
+            fig = alt.Chart(status_counts).mark_arc(innerRadius=60).encode(
+                theta=alt.Theta(field="Quantidade", type="quantitative"),
+                color=alt.Color(
+                    field="Status", 
+                    type="nominal",
+                    scale=alt.Scale(
+                        domain=["🟢 Vigente", "🔴 Vencido", "⚪ S/ Data"],
+                        range=["#22c55e", "#ef4444", "#94a3b8"]
+                    ),
+                    legend=alt.Legend(title="Status")
+                ),
+                tooltip=['Status', 'Quantidade']
+            ).properties(height=350)
             
-            fig = px.pie(
-                status_counts, 
-                values='Quantidade', 
-                names='Status', 
-                hole=0.5, # Espaçamento central de 50%
-                color='Status',
-                color_discrete_map=color_map
-            )
-            
-            fig.update_traces(textposition='inside', textinfo='percent+label')
-            fig.update_layout(showlegend=False, height=350, margin=dict(t=0, b=0, l=0, r=0))
-            
-            st.plotly_chart(fig, use_container_width=True)
+            st.altair_chart(fig, use_container_width=True)
             
             # Resumo numérico abaixo do gráfico
             st.write(f"**Total de Contratos:** {len(df_contracts)}")
