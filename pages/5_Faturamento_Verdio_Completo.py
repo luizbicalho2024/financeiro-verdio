@@ -184,7 +184,6 @@ def processar_planilha_lote(file_bytes, file_name, tracker_inventory):
 
         client_prices = {}
         for cliente in df_merged['Cliente'].unique():
-            # Usa sanitização para garantir que nomes com '/' sejam encontrados
             doc_id = sanitize_id(cliente)
             contrato_cliente = contratos_db.get(doc_id)
             if contrato_cliente and 'precos_por_tipo' in contrato_cliente:
@@ -222,19 +221,25 @@ def processar_planilha_lote(file_bytes, file_name, tracker_inventory):
 def generate_master_excel(df_aprovado):
     output = io.BytesIO()
     resumo_data = []
-    # Agrupa por Cliente e Tipo para o Excel também ser detalhado
-    for (cliente, tipo), df_group in df_aprovado.groupby(['Cliente', 'Tipo']):
+    
+    # Agrupa apenas por Cliente para manter 1 linha por cliente no Excel
+    for cliente, df_cliente in df_aprovado.groupby('Cliente'):
+        detalhes_modelos = []
+        for tipo, df_tipo in df_cliente.groupby('Tipo'):
+            val = df_tipo['Valor Unitario'].max()
+            qtd = len(df_tipo)
+            detalhes_modelos.append(f"{tipo}: {qtd} un. a R$ {val:.2f}")
+            
         resumo_data.append({
             'Cliente': cliente,
-            'Modelo/Tipo': tipo,
-            'Valor Unitário': df_group['Valor Unitario'].max(),
-            'Qtd Terminais': len(df_group),
-            'Subtotal': df_group['Valor a Faturar'].sum()
+            'Detalhes Contratos (Modelos)': " | ".join(detalhes_modelos),
+            'Qtd Terminais Faturados': len(df_cliente),
+            'Valor Total a Faturar': df_cliente['Valor a Faturar'].sum()
         })
         
     df_resumo = pd.DataFrame(resumo_data)
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        df_resumo.to_excel(writer, index=False, sheet_name='Resumo Detalhado')
+        df_resumo.to_excel(writer, index=False, sheet_name='Resumo Faturamento Lote')
         df_aprovado.to_excel(writer, index=False, sheet_name='Todos os Terminais')
     return output.getvalue()
 
@@ -293,7 +298,7 @@ def salvar_historico_lote(df_aprovado, periodo_relatorio):
 
 # --- 4. INTERFACE ---
 st.subheader("Processamento de Faturamento em Lote (Múltiplos Clientes)")
-st.info("O sistema calcula automaticamente baseando-se nos contratos. Clientes com múltiplos modelos serão discriminados no resumo.")
+st.info("O sistema calcula automaticamente baseando-se nos contratos. O resumo abaixo agrupa todos os dados em uma única linha por cliente.")
 
 uploaded_file = st.file_uploader("Selecione o relatório consolidado", type=['xlsx', 'csv'])
 st.markdown("---")
@@ -338,12 +343,22 @@ if uploaded_file:
         c2.metric("Total de Terminais", len(df_aprovado))
         c3.info(f"**FATURAMENTO TOTAL:** R$ {df_aprovado['Valor a Faturar'].sum():,.2f}")
         
-        # --- TABELA DE RESUMO POR CLIENTE E MODELO ---
-        resumo_tela = df_aprovado.groupby(['Cliente', 'Tipo']).agg(
-            Valor_Unitário=('Valor Unitario', 'max'),
-            Qtd_Terminais=('Terminal', 'count'),
-            Valor_Total=('Valor a Faturar', 'sum')
-        ).reset_index()
+        # --- TABELA DE RESUMO: 1 LINHA POR CLIENTE COM VALORES CONSOLIDADOS ---
+        resumo_data_tela = []
+        for cliente, df_cliente in df_aprovado.groupby('Cliente'):
+            detalhes_modelos = []
+            for tipo, df_tipo in df_cliente.groupby('Tipo'):
+                val = df_tipo['Valor Unitario'].max()
+                detalhes_modelos.append(f"{tipo}: R$ {val:.2f}")
+                
+            resumo_data_tela.append({
+                'Cliente': cliente,
+                'Valores Unitários (Modelos)': " | ".join(detalhes_modelos),
+                'Qtd_Terminais': len(df_cliente),
+                'Valor_Total': df_cliente['Valor a Faturar'].sum()
+            })
+            
+        resumo_tela = pd.DataFrame(resumo_data_tela)
         
         with st.expander("Ver Resumo por Cliente e Contrato", expanded=True):
             st.dataframe(
@@ -351,8 +366,8 @@ if uploaded_file:
                 use_container_width=True, 
                 hide_index=True,
                 column_config={
-                    "Valor_Unitário": st.column_config.NumberColumn("Valor Unitário (Contrato)", format="R$ %.2f"),
-                    "Valor_Total": st.column_config.NumberColumn("Subtotal Faturado", format="R$ %.2f")
+                    "Qtd_Terminais": "Qtd Terminais",
+                    "Valor_Total": st.column_config.NumberColumn("Valor Total Faturado", format="R$ %.2f")
                 }
             )
             
