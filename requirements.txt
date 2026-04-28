@@ -8,3 +8,4 @@ bcrypt
 setuptools
 streamlit-authenticator
 requests
+plotly
