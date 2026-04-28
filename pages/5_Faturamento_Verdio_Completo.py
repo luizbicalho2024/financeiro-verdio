@@ -297,7 +297,7 @@ def salvar_historico_lote(df_aprovado, periodo_relatorio):
     st.session_state['lote_salvo'] = True
 
 # --- 4. INTERFACE ---
-st.subheader("Processamento de Faturamento em Lote (Múltiplos Clientes)")
+st.subheader("FINANCIERO - Processamento de Faturamento em Lote")
 st.info("O sistema calcula automaticamente baseando-se nos contratos. O resumo abaixo agrupa todos os dados em uma única linha por cliente.")
 
 uploaded_file = st.file_uploader("Selecione o relatório consolidado", type=['xlsx', 'csv'])
