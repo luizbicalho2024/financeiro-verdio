@@ -226,32 +226,134 @@ def apply_branding() -> dict[str, Any]:
         background: {hover_surface} !important;
       }}
 
-      /* Botões */
-      .stButton > button[kind="primary"],
-      .stFormSubmitButton > button[kind="primary"],
-      [data-testid="stDownloadButton"] > button[kind="primary"],
-      button[data-testid="stBaseButton-primary"] {{
+      /*
+       * Botões.
+       * Streamlit 1.56 usa data-testid diferentes para botão normal e
+       * form_submit_button. Aplicamos o tema em ambos os casos e também
+       * sobrescrevemos a cor dos elementos internos do rótulo.
+       */
+      [data-testid="stBaseButton-primary"],
+      [data-testid="stBaseButton-primaryFormSubmit"],
+      [data-testid="stBaseButton-secondary"],
+      [data-testid="stBaseButton-secondaryFormSubmit"],
+      [data-testid="stBaseButton-tertiary"],
+      [data-testid="stBaseButton-tertiaryFormSubmit"] {{
+        min-height: 2.55rem !important;
+        border-radius: 10px !important;
+        font-weight: 650 !important;
+        transition:
+          transform .15s ease,
+          box-shadow .15s ease,
+          border-color .15s ease,
+          background-color .15s ease,
+          color .15s ease !important;
+      }}
+
+      [data-testid="stBaseButton-primary"],
+      [data-testid="stBaseButton-primaryFormSubmit"] {{
+        background: var(--fv-primary) !important;
+        color: var(--fv-on-primary) !important;
+        border: 1px solid var(--fv-primary) !important;
+      }}
+
+      [data-testid="stBaseButton-primary"] *,
+      [data-testid="stBaseButton-primaryFormSubmit"] * {{
+        color: var(--fv-on-primary) !important;
+      }}
+
+      [data-testid="stBaseButton-primary"]:hover,
+      [data-testid="stBaseButton-primaryFormSubmit"]:hover {{
         background: var(--fv-primary) !important;
         color: var(--fv-on-primary) !important;
         border-color: var(--fv-primary) !important;
-      }}
-
-      .stButton > button,
-      .stFormSubmitButton > button,
-      [data-testid="stDownloadButton"] > button {{
-        min-height: 2.55rem;
-        border-radius: 10px !important;
-        font-weight: 650 !important;
-        border: 1px solid var(--fv-border) !important;
-        transition: transform .15s ease, box-shadow .15s ease, border-color .15s ease;
-      }}
-
-      .stButton > button:hover,
-      .stFormSubmitButton > button:hover,
-      [data-testid="stDownloadButton"] > button:hover {{
         transform: translateY(-1px);
+        box-shadow: 0 8px 20px {subtle_primary} !important;
+      }}
+
+      [data-testid="stBaseButton-primary"]:hover *,
+      [data-testid="stBaseButton-primaryFormSubmit"]:hover * {{
+        color: var(--fv-on-primary) !important;
+      }}
+
+      [data-testid="stBaseButton-secondary"],
+      [data-testid="stBaseButton-secondaryFormSubmit"] {{
+        background: var(--fv-surface) !important;
+        color: var(--fv-text) !important;
+        border: 1px solid var(--fv-border) !important;
+      }}
+
+      [data-testid="stBaseButton-secondary"] *,
+      [data-testid="stBaseButton-secondaryFormSubmit"] * {{
+        color: var(--fv-text) !important;
+      }}
+
+      [data-testid="stBaseButton-secondary"]:hover,
+      [data-testid="stBaseButton-secondaryFormSubmit"]:hover {{
+        background: {hover_surface} !important;
+        color: var(--fv-primary) !important;
         border-color: var(--fv-primary) !important;
-        box-shadow: 0 8px 20px {subtle_primary};
+        transform: translateY(-1px);
+        box-shadow: 0 8px 20px {subtle_primary} !important;
+      }}
+
+      [data-testid="stBaseButton-secondary"]:hover *,
+      [data-testid="stBaseButton-secondaryFormSubmit"]:hover * {{
+        color: var(--fv-primary) !important;
+      }}
+
+      [data-testid="stBaseButton-tertiary"],
+      [data-testid="stBaseButton-tertiaryFormSubmit"] {{
+        background: transparent !important;
+        color: var(--fv-primary) !important;
+        border: 1px solid transparent !important;
+      }}
+
+      [data-testid="stBaseButton-tertiary"] *,
+      [data-testid="stBaseButton-tertiaryFormSubmit"] * {{
+        color: var(--fv-primary) !important;
+      }}
+
+      [data-testid="stBaseButton-tertiary"]:hover,
+      [data-testid="stBaseButton-tertiaryFormSubmit"]:hover {{
+        background: {hover_surface} !important;
+        color: var(--fv-primary) !important;
+        border-color: var(--fv-border) !important;
+      }}
+
+      [data-testid="stBaseButton-primary"]:disabled,
+      [data-testid="stBaseButton-primaryFormSubmit"]:disabled,
+      [data-testid="stBaseButton-secondary"]:disabled,
+      [data-testid="stBaseButton-secondaryFormSubmit"]:disabled,
+      [data-testid="stBaseButton-tertiary"]:disabled,
+      [data-testid="stBaseButton-tertiaryFormSubmit"]:disabled {{
+        opacity: .55 !important;
+        cursor: not-allowed !important;
+        transform: none !important;
+        box-shadow: none !important;
+      }}
+
+      /* Page links também funcionam como ações e seguem a identidade visual. */
+      [data-testid="stPageLink-NavLink"] {{
+        background: var(--fv-surface) !important;
+        color: var(--fv-primary) !important;
+        border: 1px solid var(--fv-border) !important;
+        border-radius: 10px !important;
+        padding: .48rem .70rem !important;
+        text-decoration: none !important;
+        transition:
+          background-color .15s ease,
+          border-color .15s ease,
+          transform .15s ease !important;
+      }}
+
+      [data-testid="stPageLink-NavLink"] * {{
+        color: var(--fv-primary) !important;
+      }}
+
+      [data-testid="stPageLink-NavLink"]:hover {{
+        background: {hover_surface} !important;
+        border-color: var(--fv-primary) !important;
+        transform: translateY(-1px);
       }}
 
       /* Tabs, toggles e seleção */
@@ -332,6 +434,113 @@ def apply_branding() -> dict[str, Any]:
       .fv-logo {{ display:flex; align-items:center; width:fit-content; max-width:100%; margin:.15rem 0 .85rem; }}
       .fv-logo img {{ display:block; width:auto; height:auto; max-width:100%; max-height:145px; object-fit:contain; }}
       .fv-logo-sidebar img {{ max-height:100px; }}
+
+      /*
+       * Overrides finais da sidebar.
+       * Eles ficam no fim do CSS para impedir que as regras globais de headings,
+       * Markdown, botões e expanders substituam as cores específicas da sidebar.
+       */
+      [data-testid="stSidebar"] [data-testid="stMarkdownContainer"] h1,
+      [data-testid="stSidebar"] [data-testid="stMarkdownContainer"] h2,
+      [data-testid="stSidebar"] [data-testid="stMarkdownContainer"] h3,
+      [data-testid="stSidebar"] [data-testid="stMarkdownContainer"] h4,
+      [data-testid="stSidebar"] [data-testid="stMarkdownContainer"] h5,
+      [data-testid="stSidebar"] [data-testid="stMarkdownContainer"] h6,
+      [data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p,
+      [data-testid="stSidebar"] [data-testid="stMarkdownContainer"] li,
+      [data-testid="stSidebar"] label {{
+        color: var(--fv-sidebar-text) !important;
+      }}
+
+      [data-testid="stSidebar"] [data-testid="stCaptionContainer"] p,
+      [data-testid="stSidebar"] small {{
+        color: var(--fv-sidebar-muted) !important;
+      }}
+
+      [data-testid="stSidebar"] [data-testid="stPageLink-NavLink"] {{
+        background: {subtle_primary} !important;
+        color: var(--fv-sidebar-text) !important;
+        border: 1px solid {input_focus} !important;
+        border-radius: 10px !important;
+        transform: none !important;
+      }}
+
+      [data-testid="stSidebar"] [data-testid="stPageLink-NavLink"] * {{
+        color: var(--fv-sidebar-text) !important;
+      }}
+
+      [data-testid="stSidebar"] [data-testid="stPageLink-NavLink"]:hover {{
+        background: {input_focus} !important;
+        color: var(--fv-sidebar-text) !important;
+        border-color: var(--fv-primary) !important;
+        transform: translateX(2px) !important;
+      }}
+
+      [data-testid="stSidebar"] [data-testid="stPageLink-NavLink"]:hover * {{
+        color: var(--fv-sidebar-text) !important;
+      }}
+
+      [data-testid="stSidebar"] [data-testid="stBaseButton-secondary"],
+      [data-testid="stSidebar"] [data-testid="stBaseButton-secondaryFormSubmit"],
+      [data-testid="stSidebar"] [data-testid="stBaseButton-tertiary"],
+      [data-testid="stSidebar"] [data-testid="stBaseButton-tertiaryFormSubmit"] {{
+        background: transparent !important;
+        color: var(--fv-sidebar-text) !important;
+        border: 1px solid {input_focus} !important;
+        box-shadow: none !important;
+      }}
+
+      [data-testid="stSidebar"] [data-testid="stBaseButton-secondary"] *,
+      [data-testid="stSidebar"] [data-testid="stBaseButton-secondaryFormSubmit"] *,
+      [data-testid="stSidebar"] [data-testid="stBaseButton-tertiary"] *,
+      [data-testid="stSidebar"] [data-testid="stBaseButton-tertiaryFormSubmit"] * {{
+        color: var(--fv-sidebar-text) !important;
+      }}
+
+      [data-testid="stSidebar"] [data-testid="stBaseButton-secondary"]:hover,
+      [data-testid="stSidebar"] [data-testid="stBaseButton-secondaryFormSubmit"]:hover,
+      [data-testid="stSidebar"] [data-testid="stBaseButton-tertiary"]:hover,
+      [data-testid="stSidebar"] [data-testid="stBaseButton-tertiaryFormSubmit"]:hover {{
+        background: {subtle_primary} !important;
+        color: var(--fv-sidebar-text) !important;
+        border-color: var(--fv-primary) !important;
+        transform: translateY(-1px) !important;
+      }}
+
+      [data-testid="stSidebar"] [data-testid="stBaseButton-secondary"]:hover *,
+      [data-testid="stSidebar"] [data-testid="stBaseButton-secondaryFormSubmit"]:hover *,
+      [data-testid="stSidebar"] [data-testid="stBaseButton-tertiary"]:hover *,
+      [data-testid="stSidebar"] [data-testid="stBaseButton-tertiaryFormSubmit"]:hover * {{
+        color: var(--fv-sidebar-text) !important;
+      }}
+
+      [data-testid="stSidebar"] [data-testid="stBaseButton-primary"],
+      [data-testid="stSidebar"] [data-testid="stBaseButton-primaryFormSubmit"] {{
+        background: var(--fv-primary) !important;
+        color: var(--fv-on-primary) !important;
+        border-color: var(--fv-primary) !important;
+      }}
+
+      [data-testid="stSidebar"] [data-testid="stBaseButton-primary"] *,
+      [data-testid="stSidebar"] [data-testid="stBaseButton-primaryFormSubmit"] * {{
+        color: var(--fv-on-primary) !important;
+      }}
+
+      [data-testid="stSidebar"] [data-testid="stExpander"] {{
+        background: transparent !important;
+        border-color: {input_focus} !important;
+        box-shadow: none !important;
+      }}
+
+      [data-testid="stSidebar"] [data-testid="stExpander"] details,
+      [data-testid="stSidebar"] [data-testid="stExpander"] summary {{
+        background: transparent !important;
+        color: var(--fv-sidebar-text) !important;
+      }}
+
+      [data-testid="stSidebar"] [data-testid="stExpander"] summary * {{
+        color: var(--fv-sidebar-text) !important;
+      }}
 
       #MainMenu {{ visibility: hidden; }}
       footer {{ visibility: hidden; }}
