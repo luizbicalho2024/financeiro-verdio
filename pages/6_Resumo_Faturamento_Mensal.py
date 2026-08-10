@@ -10,20 +10,19 @@ from datetime import datetime
 
 # Adiciona o caminho base para importar o banco de dados
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+from app_core.ui import apply_branding, render_sidebar
 import user_management_db as umdb
 
 # --- CONFIGURAÇÃO DA PÁGINA ---
 st.set_page_config(layout="wide", page_title="Resumo Faturamento Mensal", page_icon="📊")
+apply_branding()
 
 if "user_info" not in st.session_state:
     st.error("🔒 Acesso Negado! Por favor, faça login.")
     st.stop()
 
 # --- BARRA LATERAL ---
-st.sidebar.image("imgs/v-c.png", width=120)
-st.sidebar.title("Resumo Mensal")
-if st.sidebar.button("Voltar para Home"):
-    st.switch_page("1_Home.py")
+render_sidebar()
 
 st.title("📊 Resumo de Faturamento Mensal")
 st.markdown("Esta página processa a planilha global e calcula o faturamento bruto baseado no histórico de cada cliente.")

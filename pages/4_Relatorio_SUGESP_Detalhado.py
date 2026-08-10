@@ -3,6 +3,7 @@ import sys
 import os
 import re
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+from app_core.ui import apply_branding, render_sidebar
 
 import streamlit as st
 import pandas as pd
@@ -17,6 +18,7 @@ st.set_page_config(
     page_title="Relatório Detalhado SUGESP",
     page_icon="📑"
 )
+apply_branding()
 
 # --- VERIFICAÇÃO DE LOGIN ---
 if "user_info" not in st.session_state:
@@ -24,13 +26,7 @@ if "user_info" not in st.session_state:
     st.stop()
 
 # --- BARRA LATERAL PADRONIZADA ---
-st.sidebar.image("imgs/v-c.png", width=120)
-st.sidebar.title(f"Olá, {st.session_state.get('name', 'N/A')}! 👋")
-st.sidebar.markdown("---")
-if st.sidebar.button("Logout"):
-    for key in list(st.session_state.keys()):
-        del st.session_state[key]
-    st.switch_page("1_Home.py")
+render_sidebar()
 
 # --- 2. FUNÇÕES DE LÓGICA ---
 

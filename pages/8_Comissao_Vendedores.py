@@ -8,23 +8,20 @@ from datetime import datetime
 
 # Adiciona diretório pai
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+from app_core.ui import apply_branding, render_sidebar
 import user_management_db as umdb
 from firebase_config import db
 
 # --- CONFIGURAÇÃO DA PÁGINA ---
 st.set_page_config(layout="wide", page_title="Comissões Detalhadas", page_icon="💰")
+apply_branding()
 
 # --- AUTH ---
 if "user_info" not in st.session_state: st.error("🔒 Login necessário."); st.stop()
 if st.session_state.get("role", "Usuário").lower() != "admin": st.error("🚫 Acesso restrito."); st.stop()
 
 # --- SIDEBAR ---
-st.sidebar.image("imgs/v-c.png", width=120)
-st.sidebar.title(f"Olá, {st.session_state.get('name', 'N/A')}!")
-st.sidebar.markdown("---")
-if st.sidebar.button("Logout"):
-    for k in list(st.session_state.keys()): del st.session_state[k]
-    st.switch_page("1_Home.py")
+render_sidebar()
 
 # --- FUNÇÕES AUXILIARES ---
 def get_seller_mappings():

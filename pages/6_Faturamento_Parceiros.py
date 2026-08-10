@@ -11,6 +11,7 @@ import streamlit as st
 
 # Adiciona o diretório raiz ao path para importar módulos do projeto
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+from app_core.ui import apply_branding, render_sidebar
 from firebase_config import db
 import user_management_db as umdb
 
@@ -37,18 +38,13 @@ class PDF(FPDF):
 
 # --- CONFIGURAÇÃO E AUTENTICAÇÃO ---
 st.set_page_config(layout="wide", page_title="Faturamento Filiais/Parceiros", page_icon="🏢")
+apply_branding()
 
 if "user_info" not in st.session_state:
     st.error("🔒 Acesso Negado! Por favor, faça login para visualizar esta página.")
     st.stop()
 
-st.sidebar.image("imgs/v-c.png", width=120)
-st.sidebar.title(f"Olá, {st.session_state.get('name', 'N/A')}! 👋")
-st.sidebar.markdown("---")
-if st.sidebar.button("Logout"):
-    for key in list(st.session_state.keys()):
-        del st.session_state[key]
-    st.switch_page("1_Home.py")
+render_sidebar()
 
 # --- FUNÇÕES DE BANCO DE DADOS (FIREBASE) ---
 def get_regras_parceiros():
@@ -261,7 +257,10 @@ def create_pdf_parceiro(nome_parceiro, periodo, totais, df_final):
             pdf.cell(widths[4], 6, f"R$ {row['Valor Unitario']:,.2f}", 1, 0, 'C')
             pdf.cell(widths[5], 6, f"R$ {row['Valor a Faturar']:,.2f}", 1, 1, 'C')
 
-    return bytes(pdf.output(dest='S').encode('latin-1', errors='replace'))
+    data = pdf.output(dest='S')
+    if isinstance(data, (bytes, bytearray)):
+        return bytes(data)
+    return str(data).encode('latin-1', errors='replace')
 
 
 # --- INTERFACE DO USUÁRIO ---

@@ -4,6 +4,7 @@ import os
 from datetime import datetime, date
 import calendar
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+from app_core.ui import apply_branding, render_sidebar
 
 import streamlit as st
 import pandas as pd
@@ -12,6 +13,7 @@ from firebase_config import db
 import user_management_db as umdb
 
 st.set_page_config(layout="wide", page_title="Contratos e Preços por Cliente", page_icon="📝")
+apply_branding()
 
 # --- VERIFICAÇÃO DE LOGIN E PERMISSÃO ---
 if "user_info" not in st.session_state:
@@ -23,13 +25,7 @@ if st.session_state.get("role", "Usuário").lower() != "admin":
     st.stop()
 
 # --- BARRA LATERAL ---
-st.sidebar.image("imgs/v-c.png", width=120)
-st.sidebar.title(f"Olá, {st.session_state.get('name', 'N/A')}! 👋")
-st.sidebar.markdown("---")
-if st.sidebar.button("Logout"):
-    for key in list(st.session_state.keys()):
-        del st.session_state[key]
-    st.switch_page("1_Home.py")
+render_sidebar()
 
 # --- FUNÇÕES AUXILIARES ---
 def add_months(sourcedate, months):

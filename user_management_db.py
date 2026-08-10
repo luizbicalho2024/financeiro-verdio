@@ -1,224 +1,317 @@
-# user_management_db.py
+from __future__ import annotations
+
+import logging
+from datetime import datetime, timezone
+from typing import Any, Iterable
+
+import pandas as pd
 import streamlit as st
 from firebase_config import db
-from datetime import datetime
-import pandas as pd
 
-# --- FUNÇÕES DE LOG E SISTEMA ---
+log = logging.getLogger("financeiro_verdio.database")
+FIRESTORE_BATCH_LIMIT = 450
 
-def log_action(level, user, message, details=None):
-    """Registra uma ação no log do sistema no Firestore."""
+
+def _current_user_email() -> str:
+    return str(st.session_state.get("user_info", {}).get("email", "sistema") or "sistema").strip().lower()
+
+
+def _chunks(items: list[Any], size: int = FIRESTORE_BATCH_LIMIT) -> Iterable[list[Any]]:
+    for start in range(0, len(items), size):
+        yield items[start:start + size]
+
+
+# --- LOGS E AUDITORIA -----------------------------------------------------
+def log_action(level: str, user: str, message: str, details: Any = None) -> bool:
     try:
-        log_entry = {
-            "timestamp": datetime.now(),
-            "level": level,
-            "user": user,
-            "message": message,
-            "details": details or {}
-        }
-        db.collection("system_logs").add(log_entry)
-    except Exception as e:
-        st.warning(f"Não foi possível registrar o log: {e}")
-
-def get_system_logs():
-    try:
-        logs_ref = db.collection("system_logs").order_by("timestamp", direction="DESCENDING").stream()
-        return [log.to_dict() for log in logs_ref]
-    except Exception as e:
-        st.error(f"Erro ao buscar logs do sistema: {e}")
-        return []
-
-# --- FUNÇÕES DE FATURAMENTO E HISTÓRICO ---
-
-def get_billing_history():
-    """Busca todo o histórico de faturamento, ordenado por data."""
-    try:
-        history_ref = db.collection("billing_history").order_by("data_geracao", direction="DESCENDING").stream()
-        history = []
-        for doc in history_ref:
-            doc_data = doc.to_dict()
-            doc_data["_id"] = doc.id
-            history.append(doc_data)
-        return history
-    except Exception as e:
-        st.error(f"Erro ao buscar histórico de faturamento: {e}")
-        return []
-
-def get_last_billing_for_client(client_name):
-    """Busca o último registro de faturamento para um cliente específico."""
-    try:
-        history_ref = db.collection("billing_history").where("cliente", "==", client_name).order_by("data_geracao", direction="DESCENDING").limit(1).stream()
-        for doc in history_ref:
-            return doc.to_dict()
-        return None
-    except Exception as e:
-        st.error(f"Erro ao buscar o último faturamento do cliente: {e}")
-        return None
-
-def log_faturamento(faturamento_data, detalhes_itens=None):
-    """
-    Salva um registro de faturamento gerado no Firestore.
-    REGRA: Mantém apenas UM registro por Cliente/Período (sobrescreve anteriores).
-    """
-    try:
-        user_email = st.session_state.get("user_info", {}).get("email", "sistema")
-        cliente = faturamento_data.get("cliente")
-        periodo = faturamento_data.get("periodo_relatorio")
-
-        # --- 1. VERIFICAR DUPLICIDADE E LIMPAR ANTIGOS ---
-        if cliente and periodo:
-            # Busca registros existentes para o mesmo cliente e período
-            existing_docs = db.collection("billing_history")\
-                .where("cliente", "==", cliente)\
-                .where("periodo_relatorio", "==", periodo)\
-                .stream()
-            
-            deleted_count = 0
-            for doc in existing_docs:
-                doc.reference.delete()
-                deleted_count += 1
-            
-            if deleted_count > 0:
-                log_action("WARNING", user_email, f"Substituição de Faturamento: {deleted_count} registro(s) anterior(es) removido(s) para {cliente} - {periodo}.")
-
-        # --- 2. PREPARAR NOVO REGISTRO ---
-        faturamento_data.update({
-            "data_geracao": datetime.now(),
-            "gerado_por": user_email
-        })
-        
-        # Adiciona detalhes item a item se houver
-        if detalhes_itens is not None and isinstance(detalhes_itens, list):
-            faturamento_data["itens_detalhados"] = detalhes_itens
-
-        # --- 3. SALVAR NOVO REGISTRO ---
-        db.collection("billing_history").add(faturamento_data)
-        
-        # Log de sistema (sem os detalhes pesados para economizar espaço no log visual)
-        log_data_summary = {k: v for k, v in faturamento_data.items() if k != "itens_detalhados"}
-        log_action("INFO", user_email, f"Novo faturamento salvo para {cliente} ({periodo}).", log_data_summary)
-        
-        st.toast(f"Histórico salvo! (Versão anterior do mês substituída, se existia)", icon="✅")
-        
-    except Exception as e:
-        st.error(f"Erro ao salvar o histórico de faturamento: {e}")
-
-def delete_billing_history(history_id):
-    """Exclui um registro do histórico de faturamento pelo seu ID."""
-    try:
-        db.collection("billing_history").document(history_id).delete()
-        user_email = st.session_state.get("user_info", {}).get("email", "sistema")
-        log_action("WARNING", user_email, f"Registro de histórico de faturamento excluído manualmente.", {"history_id": history_id})
-        st.success("Registro excluído com sucesso!")
+        db.collection("system_logs").add(
+            {
+                "timestamp": datetime.now(timezone.utc),
+                "level": str(level or "INFO").upper(),
+                "user": str(user or "sistema"),
+                "message": str(message or ""),
+                "details": details if details is not None else {},
+            }
+        )
         return True
-    except Exception as e:
-        st.error(f"Erro ao excluir o registro de histórico: {e}")
+    except Exception:
+        log.exception("Não foi possível registrar log de auditoria.")
         return False
 
-# --- FUNÇÕES DE ESTOQUE E PREÇOS ---
 
-@st.cache_data(ttl=600)
-def get_tracker_inventory():
-    """Busca todo o inventário de rastreadores do Firestore."""
+def get_system_logs(limit: int = 2000) -> list[dict[str, Any]]:
     try:
-        trackers_ref = db.collection("trackers").stream()
-        return [doc.to_dict() for doc in trackers_ref]
-    except Exception as e:
-        st.error(f"Erro ao buscar inventário de rastreadores: {e}")
+        safe_limit = max(1, min(int(limit), 10000))
+        query = (
+            db.collection("system_logs")
+            .order_by("timestamp", direction="DESCENDING")
+            .limit(safe_limit)
+        )
+        result = []
+        for document in query.stream():
+            data = document.to_dict()
+            data["_id"] = document.id
+            result.append(data)
+        return result
+    except Exception:
+        log.exception("Erro ao buscar logs do sistema.")
+        st.error("Não foi possível carregar os logs do sistema.")
         return []
 
-def update_tracker_inventory(df):
-    """Atualiza/Cria registros de rastreadores no Firestore em lote."""
+
+# --- FATURAMENTO E HISTÓRICO ---------------------------------------------
+def get_billing_history(limit: int = 5000) -> list[dict[str, Any]]:
     try:
-        batch = db.batch()
-        count = 0
-        for index, row in df.iterrows():
-            serial_number = str(row['Nº Equipamento']).strip()
-            if not serial_number:
-                continue
-            
-            tracker_ref = db.collection("trackers").document(serial_number)
-            data = {
-                'Nº Equipamento': serial_number,
-                'Modelo': row['Modelo'],
-                'Tipo': str(row['Tipo']).upper().strip()
-            }
-            batch.set(tracker_ref, data, merge=True)
-            count += 1
-        batch.commit()
-        return count
-    except Exception as e:
-        st.error(f"Erro ao salvar o inventário no banco de dados: {e}")
+        safe_limit = max(1, min(int(limit), 20000))
+        query = (
+            db.collection("billing_history")
+            .order_by("data_geracao", direction="DESCENDING")
+            .limit(safe_limit)
+        )
+        history: list[dict[str, Any]] = []
+        for document in query.stream():
+            data = document.to_dict()
+            data["_id"] = document.id
+            history.append(data)
+        return history
+    except Exception:
+        log.exception("Erro ao buscar histórico de faturamento.")
+        st.error("Não foi possível carregar o histórico de faturamento.")
+        return []
+
+
+def get_recent_billing(limit: int = 6) -> list[dict[str, Any]]:
+    return get_billing_history(limit=max(1, min(int(limit), 20)))
+
+
+def get_last_billing_for_client(client_name: str) -> dict[str, Any] | None:
+    try:
+        query = (
+            db.collection("billing_history")
+            .where("cliente", "==", str(client_name))
+            .order_by("data_geracao", direction="DESCENDING")
+            .limit(1)
+        )
+        for document in query.stream():
+            data = document.to_dict()
+            data["_id"] = document.id
+            return data
+        return None
+    except Exception:
+        log.exception("Erro ao buscar último faturamento do cliente %s", client_name)
         return None
 
-@st.cache_data(ttl=600)
-def get_unique_models_and_types():
+
+def log_faturamento(faturamento_data: dict[str, Any], detalhes_itens: list[Any] | None = None) -> bool:
+    """Mantém um único registro por cliente/período sem apagar o registro anterior antes do novo estar salvo."""
+    try:
+        payload = dict(faturamento_data or {})
+        cliente = str(payload.get("cliente") or "").strip()
+        periodo = str(payload.get("periodo_relatorio") or "").strip()
+        user_email = _current_user_email()
+
+        payload.update(
+            {
+                "cliente": cliente,
+                "periodo_relatorio": periodo,
+                "data_geracao": datetime.now(timezone.utc),
+                "gerado_por": user_email,
+            }
+        )
+        if detalhes_itens is not None and isinstance(detalhes_itens, list):
+            payload["itens_detalhados"] = detalhes_itens
+
+        existing_docs = []
+        if cliente and periodo:
+            existing_docs = list(
+                db.collection("billing_history")
+                .where("cliente", "==", cliente)
+                .where("periodo_relatorio", "==", periodo)
+                .stream()
+            )
+
+        if existing_docs:
+            primary = existing_docs[0]
+            primary.reference.set(payload)
+            for duplicate in existing_docs[1:]:
+                duplicate.reference.delete()
+            if len(existing_docs) > 1:
+                log_action(
+                    "WARNING",
+                    user_email,
+                    "Registros duplicados de faturamento foram consolidados.",
+                    {"cliente": cliente, "periodo": periodo, "duplicados_removidos": len(existing_docs) - 1},
+                )
+        else:
+            db.collection("billing_history").add(payload)
+
+        summary = {key: value for key, value in payload.items() if key != "itens_detalhados"}
+        log_action("INFO", user_email, f"Faturamento salvo para {cliente} ({periodo}).", summary)
+        st.toast("Histórico de faturamento salvo.", icon="✅")
+        return True
+    except Exception:
+        log.exception("Erro ao salvar histórico de faturamento.")
+        st.error("Não foi possível salvar o histórico de faturamento.")
+        return False
+
+
+def delete_billing_history(history_id: str) -> bool:
+    try:
+        db.collection("billing_history").document(str(history_id)).delete()
+        log_action(
+            "WARNING",
+            _current_user_email(),
+            "Registro de histórico de faturamento excluído manualmente.",
+            {"history_id": history_id},
+        )
+        return True
+    except Exception:
+        log.exception("Erro ao excluir histórico %s", history_id)
+        st.error("Não foi possível excluir o registro de histórico.")
+        return False
+
+
+# --- ESTOQUE E PREÇOS -----------------------------------------------------
+@st.cache_data(ttl=600, show_spinner=False)
+def get_tracker_inventory() -> list[dict[str, Any]]:
+    try:
+        result = []
+        for document in db.collection("trackers").stream():
+            data = document.to_dict()
+            data.setdefault("Nº Equipamento", document.id)
+            result.append(data)
+        return result
+    except Exception:
+        log.exception("Erro ao buscar inventário de rastreadores.")
+        st.error("Não foi possível carregar o inventário de rastreadores.")
+        return []
+
+
+def update_tracker_inventory(df: pd.DataFrame) -> int | None:
+    try:
+        records: list[tuple[str, dict[str, Any]]] = []
+        for _, row in df.iterrows():
+            serial_number = str(row.get("Nº Equipamento", "") or "").strip()
+            if not serial_number or serial_number.lower() == "nan":
+                continue
+            records.append(
+                (
+                    serial_number,
+                    {
+                        "Nº Equipamento": serial_number,
+                        "Modelo": str(row.get("Modelo", "") or "").strip(),
+                        "Tipo": str(row.get("Tipo", "") or "").upper().strip(),
+                        "updated_at": datetime.now(timezone.utc),
+                    },
+                )
+            )
+
+        for chunk in _chunks(records):
+            batch = db.batch()
+            for serial_number, data in chunk:
+                reference = db.collection("trackers").document(serial_number)
+                batch.set(reference, data, merge=True)
+            batch.commit()
+
+        get_tracker_inventory.clear()
+        get_unique_models_and_types.clear()
+        log_action("INFO", _current_user_email(), "Inventário de rastreadores atualizado.", {"registros": len(records)})
+        return len(records)
+    except Exception:
+        log.exception("Erro ao atualizar inventário de rastreadores.")
+        st.error("Não foi possível salvar o inventário no banco de dados.")
+        return None
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def get_unique_models_and_types() -> dict[str, str]:
     try:
         trackers = get_tracker_inventory()
-        if not trackers: return {}
-        df = pd.DataFrame(trackers)
-        model_types = df.groupby('Modelo')['Tipo'].first().to_dict()
-        return model_types
-    except Exception as e:
-        st.error(f"Erro ao buscar modelos únicos: {e}")
+        if not trackers:
+            return {}
+        frame = pd.DataFrame(trackers)
+        if "Modelo" not in frame.columns or "Tipo" not in frame.columns:
+            return {}
+        frame["Modelo"] = frame["Modelo"].fillna("").astype(str).str.strip()
+        frame["Tipo"] = frame["Tipo"].fillna("").astype(str).str.upper().str.strip()
+        frame = frame[frame["Modelo"] != ""]
+        return frame.groupby("Modelo")["Tipo"].first().to_dict()
+    except Exception:
+        log.exception("Erro ao buscar modelos únicos.")
         return {}
 
-def update_type_for_models(updates):
+
+def update_type_for_models(updates: dict[str, str]) -> tuple[int, list[str]]:
     success_count = 0
-    failed_models = []
+    failed_models: list[str] = []
+
     for model, new_type in updates.items():
         try:
-            docs = db.collection('trackers').where('Modelo', '==', model).stream()
-            batch = db.batch()
-            doc_found = False
-            for doc in docs:
-                doc_found = True
-                batch.update(doc.reference, {'Tipo': new_type})
-            if doc_found:
-                batch.commit()
-                success_count += 1
-            else:
+            documents = list(db.collection("trackers").where("Modelo", "==", model).stream())
+            if not documents:
                 failed_models.append(model)
-        except Exception as e:
-            st.error(f"Erro ao atualizar o modelo '{model}': {e}")
+                continue
+
+            for chunk in _chunks(documents):
+                batch = db.batch()
+                for document in chunk:
+                    batch.update(
+                        document.reference,
+                        {
+                            "Tipo": str(new_type or "").upper().strip(),
+                            "updated_at": datetime.now(timezone.utc),
+                        },
+                    )
+                batch.commit()
+            success_count += 1
+        except Exception:
+            log.exception("Erro ao atualizar tipo do modelo %s", model)
             failed_models.append(model)
+
+    get_tracker_inventory.clear()
+    get_unique_models_and_types.clear()
     return success_count, failed_models
 
-@st.cache_data(ttl=3600)
-def get_pricing_config():
+
+@st.cache_data(ttl=900, show_spinner=False)
+def get_pricing_config() -> dict[str, Any]:
     defaults = {"GPRS": 59.90, "SATELITE": 159.90, "CAMERA": 0.0, "RADIO": 0.0}
     try:
-        config_doc = db.collection("settings").document("pricing").get()
-        data = config_doc.to_dict() if config_doc.exists else {}
-    except Exception as e:
-        st.warning(f"Erro ao buscar configurações de preço: {e}. Usando valores padrão.")
+        document = db.collection("settings").document("pricing").get()
+        data = document.to_dict() if document.exists else {}
+    except Exception:
+        log.exception("Erro ao buscar configurações de preço.")
         data = {}
 
-    tipo_equip = data.get("TIPO_EQUIPAMENTO", {})
-    normalized_types = {}
-    
-    all_keys = set(tipo_equip.keys()) | set(defaults.keys())
-    
-    for key in all_keys:
-        val = tipo_equip.get(key, defaults.get(key, 0.0))
-        if isinstance(val, (int, float)):
-            normalized_types[key] = {"price1": float(val), "price2": float(val), "price3": float(val)}
-        elif isinstance(val, dict):
+    equipment_types = data.get("TIPO_EQUIPAMENTO", {}) if isinstance(data, dict) else {}
+    equipment_types = equipment_types if isinstance(equipment_types, dict) else {}
+    normalized_types: dict[str, dict[str, float]] = {}
+
+    for key in set(equipment_types.keys()) | set(defaults.keys()):
+        value = equipment_types.get(key, defaults.get(key, 0.0))
+        if isinstance(value, (int, float)):
+            normalized_types[key] = {"price1": float(value), "price2": float(value), "price3": float(value)}
+        elif isinstance(value, dict):
             normalized_types[key] = {
-                "price1": float(val.get("price1", 0.0)),
-                "price2": float(val.get("price2", 0.0)),
-                "price3": float(val.get("price3", 0.0))
+                "price1": float(value.get("price1", 0.0) or 0.0),
+                "price2": float(value.get("price2", 0.0) or 0.0),
+                "price3": float(value.get("price3", 0.0) or 0.0),
             }
         else:
             normalized_types[key] = {"price1": 0.0, "price2": 0.0, "price3": 0.0}
-            
+
     return {"TIPO_EQUIPAMENTO": normalized_types}
 
-def update_pricing_config(new_prices):
+
+def update_pricing_config(new_prices: dict[str, Any]) -> bool:
     try:
-        db.collection("settings").document("pricing").set(new_prices, merge=True)
-        st.cache_data.clear()
+        payload = dict(new_prices or {})
+        payload["updated_at"] = datetime.now(timezone.utc)
+        db.collection("settings").document("pricing").set(payload, merge=True)
+        get_pricing_config.clear()
+        log_action("INFO", _current_user_email(), "Tabelas de preços atualizadas.")
         return True
-    except Exception as e:
-        st.error(f"Erro ao atualizar os preços: {e}")
+    except Exception:
+        log.exception("Erro ao atualizar preços.")
+        st.error("Não foi possível atualizar as tabelas de preços.")
         return False

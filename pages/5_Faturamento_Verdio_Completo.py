@@ -9,6 +9,7 @@ from datetime import datetime
 from typing import Dict, List, Tuple, Optional
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+from app_core.ui import apply_branding, render_sidebar
 
 import streamlit as st
 import pandas as pd
@@ -348,9 +349,9 @@ def _to_excel_named_sheets(sheets: Dict[str, pd.DataFrame]) -> bytes:
 
 def _pdf_bytes(pdf: FPDF) -> bytes:
     data = pdf.output(dest="S")
-    if isinstance(data, bytes):
-        return data
-    return data.encode("latin-1", errors="replace")
+    if isinstance(data, (bytes, bytearray)):
+        return bytes(data)
+    return str(data).encode("latin-1", errors="replace")
 
 
 class PDF(FPDF):
@@ -489,17 +490,12 @@ def build_totals(df_aprovado: pd.DataFrame) -> dict:
 
 # --- 1. CONFIGURAÇÃO E AUTENTICAÇÃO ---
 st.set_page_config(layout="wide", page_title="Faturamento em Lote", page_icon="imgs/v-c.png")
+apply_branding()
 if "user_info" not in st.session_state:
     st.error("🔒 Acesso Negado! Por favor, faça login para visualizar esta página.")
     st.stop()
 
-st.sidebar.image("imgs/v-c.png", width=120)
-st.sidebar.title(f"Olá, {st.session_state.get('name', 'N/A')}! 👋")
-st.sidebar.markdown("---")
-if st.sidebar.button("Logout"):
-    for key in list(st.session_state.keys()):
-        del st.session_state[key]
-    st.switch_page("1_Home.py")
+render_sidebar()
 
 
 def _load_contract_prices() -> Dict[str, Dict[str, float]]:

@@ -1,73 +1,106 @@
-# auth_functions.py
+from __future__ import annotations
+
+import logging
+from typing import Any
+
 import streamlit as st
-from firebase_admin import auth
+
 from firebase_config import db, get_auth_admin_client
 
-# Obtém o cliente de autenticação do Admin SDK
+log = logging.getLogger("financeiro_verdio.auth")
 auth_admin = get_auth_admin_client()
+VALID_ROLES = {"Usuário", "Admin"}
 
-def get_user_role(uid):
-    """Busca o nível de acesso (role) de um usuário no Firestore pelo UID."""
+
+def normalize_role(role: Any) -> str:
+    return "Admin" if str(role or "").strip().lower() == "admin" else "Usuário"
+
+
+def get_user_role(uid: str) -> str:
     try:
-        user_doc = db.collection('users').document(uid).get()
+        user_doc = db.collection("users").document(str(uid)).get()
         if user_doc.exists:
-            return user_doc.to_dict().get('role', 'Usuário')
-    except Exception as e:
-        st.error(f"Erro ao buscar o nível de acesso: {e}")
-    return 'Usuário'
+            return normalize_role(user_doc.to_dict().get("role"))
+    except Exception:
+        log.exception("Erro ao buscar role do usuário %s", uid)
+    return "Usuário"
 
-def get_all_users():
-    """Busca todos os usuários do Firebase Authentication e combina com suas roles do Firestore."""
+
+def get_all_users() -> list[dict[str, Any]]:
     try:
-        all_users = []
+        all_users: list[dict[str, Any]] = []
         for user in auth_admin.list_users().iterate_all():
-            user_data = {
-                "uid": user.uid,
-                "email": user.email,
-                "disabled": user.disabled,
-                "role": get_user_role(user.uid)
-            }
-            all_users.append(user_data)
-        return all_users
-    except Exception as e:
-        st.error(f"Erro ao carregar a lista de usuários: {e}")
+            metadata = getattr(user, "user_metadata", None)
+            all_users.append(
+                {
+                    "uid": user.uid,
+                    "email": user.email or "",
+                    "disabled": bool(user.disabled),
+                    "role": get_user_role(user.uid),
+                    "created_at": getattr(metadata, "creation_timestamp", None),
+                    "last_sign_in_at": getattr(metadata, "last_sign_in_timestamp", None),
+                }
+            )
+        return sorted(all_users, key=lambda item: str(item.get("email") or "").lower())
+    except Exception:
+        log.exception("Erro ao carregar usuários do Firebase Authentication.")
+        st.error("Não foi possível carregar os usuários. Consulte os logs do aplicativo.")
         return []
 
-def create_new_user(email, password, role):
-    """Cria um novo usuário no Firebase Auth e define sua role no Firestore."""
+
+def create_new_user(email: str, password: str, role: str) -> bool:
+    normalized_email = str(email or "").strip().lower()
+    normalized_role = normalize_role(role)
+
+    if not normalized_email or "@" not in normalized_email:
+        st.error("Informe um e-mail válido.")
+        return False
+    if len(password or "") < 8:
+        st.error("A senha inicial deve possuir pelo menos 8 caracteres.")
+        return False
+
     try:
-        new_user = auth_admin.create_user(email=email, password=password, disabled=False)
-        db.collection('users').document(new_user.uid).set({
-            'email': email,
-            'role': role
-        })
+        new_user = auth_admin.create_user(
+            email=normalized_email,
+            password=password,
+            disabled=False,
+        )
+        db.collection("users").document(new_user.uid).set(
+            {
+                "email": normalized_email,
+                "role": normalized_role,
+            },
+            merge=True,
+        )
         return True
-    except Exception as e:
-        # Adiciona tratamento específico para o erro de JWT
-        if 'invalid_grant' in str(e) or 'JWT' in str(e):
-             st.error("🚨 Erro de Autenticação (Invalid JWT Signature).")
-             st.warning("Isso indica que as credenciais da 'service_account' nos Secrets do Streamlit estão incorretas ou desatualizadas. Por favor, gere uma nova chave privada no Firebase e atualize o secret.")
+    except Exception as exc:
+        log.exception("Erro ao criar usuário %s", normalized_email)
+        message = str(exc).lower()
+        if "email_already_exists" in message or "email already exists" in message:
+            st.error("Já existe um usuário com este e-mail.")
+        elif "invalid_grant" in message or "jwt" in message:
+            st.error("As credenciais administrativas do Firebase precisam ser renovadas.")
         else:
-            st.error(f"Erro ao criar usuário: {e}")
+            st.error("Não foi possível criar o usuário. Consulte os logs do aplicativo.")
         return False
 
-def update_user_status(uid, is_disabled):
-    """Atualiza o status (habilitado/desabilitado) de um usuário no Firebase Authentication."""
+
+def update_user_status(uid: str, is_disabled: bool) -> bool:
     try:
-        auth_admin.update_user(uid, disabled=is_disabled)
-        status_text = "desabilitado" if is_disabled else "re-habilitado"
-        st.success(f"Usuário {status_text} com sucesso!")
+        auth_admin.update_user(str(uid), disabled=bool(is_disabled))
         return True
-    except Exception as e:
-        st.error(f"Erro ao atualizar o status do usuário: {e}")
+    except Exception:
+        log.exception("Erro ao atualizar status do usuário %s", uid)
+        st.error("Não foi possível atualizar o status do usuário.")
         return False
 
-def update_user_role(uid, new_role):
-    """Atualiza a role de um usuário no documento correspondente no Firestore."""
+
+def update_user_role(uid: str, new_role: str) -> bool:
+    normalized_role = normalize_role(new_role)
     try:
-        db.collection('users').document(uid).update({'role': new_role})
-        st.success("Nível de acesso atualizado com sucesso!")
+        db.collection("users").document(str(uid)).set({"role": normalized_role}, merge=True)
         return True
-    except Exception as e:
-        st.error(f"Erro ao atualizar o nível de acesso do usuário: {e}")
+    except Exception:
+        log.exception("Erro ao atualizar role do usuário %s", uid)
+        st.error("Não foi possível atualizar o nível de acesso.")
         return False

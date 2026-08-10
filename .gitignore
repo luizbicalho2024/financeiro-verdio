@@ -1,7 +1,13 @@
-# Firebase credentials
-firebase_credentials.json
-
-# Arquivos de ambiente virtual
-venv/
-*.pyc
 __pycache__/
+*.py[cod]
+*.log
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+.env
+.env.*
+.streamlit/secrets.toml
+.DS_Store
+Thumbs.db

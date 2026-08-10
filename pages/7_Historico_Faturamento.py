@@ -5,19 +5,16 @@ import pandas as pd
 import streamlit as st
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+from app_core.ui import apply_branding, render_sidebar
 import user_management_db as umdb
 
 st.set_page_config(layout="wide", page_title="Histórico de Faturamento", page_icon="📜")
+apply_branding()
 
 if "user_info" not in st.session_state:
     st.error("🔒 Acesso Negado!"); st.stop()
 
-st.sidebar.image("imgs/v-c.png", width=120)
-st.sidebar.title(f"Olá, {st.session_state.get('name', 'N/A')}! 👋")
-st.sidebar.markdown("---")
-if st.sidebar.button("Logout"):
-    for key in list(st.session_state.keys()): del st.session_state[key]
-    st.switch_page("1_Home.py")
+render_sidebar()
 
 st.title("📜 Histórico de Faturamento")
 st.markdown("Visualize os faturamentos gerados e seus detalhes.")
