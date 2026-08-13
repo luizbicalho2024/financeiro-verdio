@@ -6,9 +6,19 @@ import pandas as pd
 import streamlit as st
 
 from app_core.auth import is_admin, is_authenticated, user_email, user_name
-from app_core.ui import apply_branding, configure_page, render_card, render_hero, render_logo, render_sidebar
-from auth_functions import get_user_role
-from mongo_config import auth_client
+from app_core.shared_identity import (
+    authenticate_finance_user,
+    connection_diagnostics as identity_diagnostics,
+    get_finance_role,
+)
+from app_core.ui import (
+    apply_branding,
+    configure_page,
+    render_card,
+    render_hero,
+    render_logo,
+    render_sidebar,
+)
 import user_management_db as umdb
 
 log = logging.getLogger("financeiro_verdio.home")
@@ -19,7 +29,8 @@ branding = apply_branding()
 
 if not is_authenticated():
     st.markdown(
-        "<style>[data-testid='stSidebar'], [data-testid='stSidebarCollapsedControl'] {display:none !important;}</style>",
+        "<style>[data-testid='stSidebar'], [data-testid='stSidebarCollapsedControl'] "
+        "{display:none !important;}</style>",
         unsafe_allow_html=True,
     )
     left, center, right = st.columns([1, 1.15, 1])
@@ -27,85 +38,194 @@ if not is_authenticated():
         render_logo(max_width=300, branding=branding)
         st.markdown(f"## {branding['system_name']}")
         st.caption(branding["system_subtitle"])
+        st.caption("Use o mesmo usuário e a mesma senha do Simulador de Telemetria.")
 
         with st.form("login_form", clear_on_submit=False):
-            email = st.text_input("E-mail", placeholder="nome@empresa.com")
-            password = st.text_input("Senha", type="password", placeholder="Sua senha")
-            submitted = st.form_submit_button("Entrar", type="primary", use_container_width=True)
+            identifier = st.text_input(
+                "Usuário ou e-mail",
+                placeholder="usuario ou nome@empresa.com",
+            )
+            password = st.text_input(
+                "Senha",
+                type="password",
+                placeholder="A mesma senha do Simulador",
+            )
+            submitted = st.form_submit_button(
+                "Entrar",
+                type="primary",
+                use_container_width=True,
+            )
 
         if submitted:
-            normalized_email = email.strip().lower()
-            if not normalized_email or not password:
-                st.warning("Preencha e-mail e senha.")
+            normalized_identifier = identifier.strip().lower()
+            if not normalized_identifier or not password:
+                st.warning("Preencha usuário/e-mail e senha.")
             else:
                 try:
-                    user = auth_client.sign_in_with_email_and_password(normalized_email, password)
-                    uid = str(user.get("localId") or "")
+                    user = authenticate_finance_user(
+                        normalized_identifier,
+                        password,
+                    )
                     st.session_state["user_info"] = user
-                    st.session_state["role"] = get_user_role(uid)
-                    st.session_state["name"] = normalized_email.split("@")[0].replace(".", " ").title()
-                    umdb.log_action("INFO", normalized_email, "Login realizado.")
+                    st.session_state["role"] = user["role"]
+                    st.session_state["name"] = user["name"]
+                    umdb.log_action(
+                        "INFO",
+                        user.get("email") or user.get("username"),
+                        "Login realizado com identidade compartilhada do Simulador.",
+                    )
                     st.rerun()
                 except Exception:
-                    log.warning("Falha de login para %s", normalized_email, exc_info=True)
-                    st.error("E-mail ou senha inválidos.")
+                    log.warning(
+                        "Falha de login financeiro para %s",
+                        normalized_identifier,
+                        exc_info=True,
+                    )
+                    st.error(
+                        "Usuário, senha ou autorização de acesso ao Financeiro inválidos."
+                    )
+
+        diagnostics = identity_diagnostics()
+        if not diagnostics.get("ok"):
+            with st.expander("Diagnóstico de conexão"):
+                st.error(
+                    "Não foi possível acessar a base de usuários compartilhada."
+                )
+                st.write(diagnostics)
 
     st.stop()
 
-# Mantém a role sincronizada com o MongoDB durante a navegação.
-try:
-    uid = str(st.session_state.get("user_info", {}).get("localId") or "")
-    if uid:
-        st.session_state["role"] = get_user_role(uid)
-except Exception:
-    pass
+
+# Revalida autorização no MongoDB compartilhado.
+identifier = str(
+    st.session_state.get("user_info", {}).get("localId")
+    or st.session_state.get("user_info", {}).get("email")
+    or ""
+).strip().lower()
+role = get_finance_role(identifier) if identifier else None
+if role is None:
+    for key in ("user_info", "role", "name"):
+        st.session_state.pop(key, None)
+    st.warning("Seu acesso ao Financeiro foi removido ou sua conta está inativa.")
+    st.rerun()
+
+st.session_state["role"] = role
 
 render_sidebar()
 render_hero(
     branding["system_name"],
-    f"Bem-vindo, {user_name()}. Acompanhe os principais fluxos financeiros e acesse as rotinas pelo menu lateral.",
+    f"Bem-vindo, {user_name()}. Acompanhe os principais fluxos financeiros "
+    "e acesse as rotinas pelo menu lateral.",
 )
 
 summary_cols = st.columns(4)
 with summary_cols[0]:
     render_card("Sessão", user_name(), user_email())
 with summary_cols[1]:
-    render_card("Perfil", "Administrador" if is_admin() else "Usuário", "Permissões aplicadas em todas as páginas")
+    render_card(
+        "Perfil",
+        "Administrador" if is_admin() else "Usuário",
+        "Permissão específica do Financeiro",
+    )
 with summary_cols[2]:
-    render_card("Ambiente", "Online", "MongoDB e autenticação inicializados")
+    render_card(
+        "Identidade",
+        "Compartilhada",
+        "Usuário e senha do Simulador de Telemetria",
+    )
 with summary_cols[3]:
-    render_card("Identidade", "Personalizável", "Logo, sidebar e cores gerenciadas pelo administrador")
+    render_card(
+        "Banco",
+        "MongoDB",
+        "Dados financeiros isolados em financeiro_verdio",
+    )
 
 st.markdown("### Acessos rápidos")
 quick = st.columns(4)
 with quick[0]:
-    render_card("Faturamento", "Verdio", "Processamento completo, conferência e exportação")
-    st.page_link("pages/5_Faturamento_Verdio_Completo.py", label="Abrir faturamento")
+    render_card(
+        "Faturamento",
+        "Verdio",
+        "Processamento completo, conferência e exportação",
+    )
+    st.page_link(
+        "pages/5_Faturamento_Verdio_Completo.py",
+        label="Abrir faturamento",
+    )
 with quick[1]:
-    render_card("Faturamento", "Parceiros", "Apuração de filiais e parceiros")
-    st.page_link("pages/6_Faturamento_Parceiros.py", label="Abrir parceiros")
+    render_card(
+        "Faturamento",
+        "Parceiros",
+        "Apuração de filiais e parceiros",
+    )
+    st.page_link(
+        "pages/6_Faturamento_Parceiros.py",
+        label="Abrir parceiros",
+    )
 with quick[2]:
-    render_card("Consolidado", "Resumo mensal", "Visão resumida por período")
-    st.page_link("pages/6_Resumo_Faturamento_Mensal.py", label="Abrir resumo")
+    render_card(
+        "Consolidado",
+        "Resumo mensal",
+        "Visão resumida por período",
+    )
+    st.page_link(
+        "pages/6_Resumo_Faturamento_Mensal.py",
+        label="Abrir resumo",
+    )
 with quick[3]:
-    render_card("Histórico", "Faturamentos", "Auditoria dos registros já gerados")
-    st.page_link("pages/7_Historico_Faturamento.py", label="Abrir histórico")
+    render_card(
+        "Histórico",
+        "Faturamentos",
+        "Auditoria dos registros já gerados",
+    )
+    st.page_link(
+        "pages/7_Historico_Faturamento.py",
+        label="Abrir histórico",
+    )
 
 if is_admin():
     st.markdown("### Gestão administrativa")
     admin_cols = st.columns(4)
     with admin_cols[0]:
-        render_card("Comercial", "Contratos", "Prazos e tabelas específicas por cliente")
-        st.page_link("pages/7_Contratos_Clientes.py", label="Gerenciar contratos")
+        render_card(
+            "Comercial",
+            "Contratos",
+            "Prazos e tabelas específicas por cliente",
+        )
+        st.page_link(
+            "pages/7_Contratos_Clientes.py",
+            label="Gerenciar contratos",
+        )
     with admin_cols[1]:
-        render_card("Operação", "Estoque e preços", "Inventário e três faixas de preço")
-        st.page_link("pages/94_Gestao_Estoque.py", label="Gerenciar estoque")
+        render_card(
+            "Operação",
+            "Estoque e preços",
+            "Inventário e três faixas de preço",
+        )
+        st.page_link(
+            "pages/94_Gestao_Estoque.py",
+            label="Gerenciar estoque",
+        )
     with admin_cols[2]:
-        render_card("Segurança", "Usuários", "Acessos, perfis e bloqueios")
-        st.page_link("pages/2_Gerenciar_Usuarios.py", label="Gerenciar usuários")
+        render_card(
+            "Segurança",
+            "Acessos",
+            "Autorizações do Financeiro sobre usuários do Simulador",
+        )
+        st.page_link(
+            "pages/2_Gerenciar_Usuarios.py",
+            label="Gerenciar acessos",
+        )
     with admin_cols[3]:
-        render_card("Aparência", "Identidade visual", "Logos, cores e apresentação da plataforma")
-        st.page_link("pages/90_Identidade_Visual.py", label="Personalizar sistema")
+        render_card(
+            "Aparência",
+            "Identidade visual",
+            "Logos, cores e apresentação da plataforma",
+        )
+        st.page_link(
+            "pages/90_Identidade_Visual.py",
+            label="Personalizar sistema",
+        )
 
 recent = umdb.get_recent_billing(limit=6)
 if recent:
@@ -113,7 +233,13 @@ if recent:
     frame = pd.DataFrame(recent)
     display_columns = [
         column
-        for column in ["cliente", "periodo_relatorio", "valor_total", "data_geracao", "gerado_por"]
+        for column in [
+            "cliente",
+            "periodo_relatorio",
+            "valor_total",
+            "data_geracao",
+            "gerado_por",
+        ]
         if column in frame.columns
     ]
     if display_columns:
@@ -124,8 +250,14 @@ if recent:
             column_config={
                 "cliente": "Cliente",
                 "periodo_relatorio": "Período",
-                "valor_total": st.column_config.NumberColumn("Valor total", format="R$ %.2f"),
-                "data_geracao": st.column_config.DatetimeColumn("Gerado em", format="DD/MM/YYYY HH:mm"),
+                "valor_total": st.column_config.NumberColumn(
+                    "Valor total",
+                    format="R$ %.2f",
+                ),
+                "data_geracao": st.column_config.DatetimeColumn(
+                    "Gerado em",
+                    format="DD/MM/YYYY HH:mm",
+                ),
                 "gerado_por": "Gerado por",
             },
         )

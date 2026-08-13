@@ -138,13 +138,11 @@ def get_mongo_client() -> MongoClient:
 def get_mongo_database() -> Database:
     database = get_mongo_client()[_db_name()]
     _ensure_indexes(database)
-    _ensure_bootstrap_admin(database)
     return database
 
 
 def _ensure_indexes(database: Database) -> None:
     specs = [
-        ("users", [("email", ASCENDING)], {"unique": True, "name": "uniq_users_email"}),
         ("system_logs", [("timestamp", DESCENDING)], {"name": "idx_logs_timestamp"}),
         ("billing_history", [("cliente", ASCENDING), ("periodo_relatorio", ASCENDING)], {"unique": True, "name": "uniq_billing_current"}),
         ("billing_history", [("data_geracao", DESCENDING)], {"name": "idx_billing_history_date"}),
