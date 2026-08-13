@@ -9,7 +9,7 @@ from app_core.ui import apply_branding, render_sidebar
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-from firebase_config import db
+from mongo_config import db
 import user_management_db as umdb
 
 st.set_page_config(layout="wide", page_title="Contratos e Preços por Cliente", page_icon="📝")
@@ -213,7 +213,7 @@ with tab2:
                 if not nome_cliente.strip():
                     st.error("O nome do cliente não pode estar vazio.")
                 else:
-                    # Monta o pacote de dados para salvar no Firestore
+                    # Monta o pacote de dados para salvar no MongoDB
                     dados_salvar = {
                         "cliente": nome_cliente.strip(),
                         "ultima_atualizacao_termo": data_atualizacao.strftime("%Y-%m-%d"),

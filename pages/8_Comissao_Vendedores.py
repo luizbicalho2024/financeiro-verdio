@@ -10,7 +10,7 @@ from datetime import datetime
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from app_core.ui import apply_branding, render_sidebar
 import user_management_db as umdb
-from firebase_config import db
+from mongo_config import db
 
 # --- CONFIGURAÇÃO DA PÁGINA ---
 st.set_page_config(layout="wide", page_title="Comissões Detalhadas", page_icon="💰")

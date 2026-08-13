@@ -8,7 +8,7 @@ import streamlit as st
 from app_core.auth import is_admin, is_authenticated, user_email, user_name
 from app_core.ui import apply_branding, configure_page, render_card, render_hero, render_logo, render_sidebar
 from auth_functions import get_user_role
-from firebase_config import auth_client
+from mongo_config import auth_client
 import user_management_db as umdb
 
 log = logging.getLogger("financeiro_verdio.home")
@@ -52,7 +52,7 @@ if not is_authenticated():
 
     st.stop()
 
-# Mantém a role sincronizada com o Firestore durante a navegação.
+# Mantém a role sincronizada com o MongoDB durante a navegação.
 try:
     uid = str(st.session_state.get("user_info", {}).get("localId") or "")
     if uid:
@@ -72,7 +72,7 @@ with summary_cols[0]:
 with summary_cols[1]:
     render_card("Perfil", "Administrador" if is_admin() else "Usuário", "Permissões aplicadas em todas as páginas")
 with summary_cols[2]:
-    render_card("Ambiente", "Online", "Firebase e autenticação inicializados")
+    render_card("Ambiente", "Online", "MongoDB e autenticação inicializados")
 with summary_cols[3]:
     render_card("Identidade", "Personalizável", "Logo, sidebar e cores gerenciadas pelo administrador")
 

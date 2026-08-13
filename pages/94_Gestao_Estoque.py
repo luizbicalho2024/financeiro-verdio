@@ -72,7 +72,7 @@ with st.expander("Gerenciar Tabelas de Preços por Tipo de Equipamento", expande
     )
 
     if st.button("💾 Salvar Tabela de Preços", type="primary"):
-        # Converter de volta para o formato do dicionário do Firestore
+        # Converter de volta para o formato do dicionário do MongoDB
         new_pricing_config = {}
         for index, row in edited_df.iterrows():
             tipo = row["Tipo Equipamento"]

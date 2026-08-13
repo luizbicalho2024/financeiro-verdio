@@ -6,17 +6,17 @@ from typing import Any, Iterable
 
 import pandas as pd
 import streamlit as st
-from firebase_config import db
+from mongo_config import db
 
 log = logging.getLogger("financeiro_verdio.database")
-FIRESTORE_BATCH_LIMIT = 450
+DB_BATCH_LIMIT = 450
 
 
 def _current_user_email() -> str:
     return str(st.session_state.get("user_info", {}).get("email", "sistema") or "sistema").strip().lower()
 
 
-def _chunks(items: list[Any], size: int = FIRESTORE_BATCH_LIMIT) -> Iterable[list[Any]]:
+def _chunks(items: list[Any], size: int = DB_BATCH_LIMIT) -> Iterable[list[Any]]:
     for start in range(0, len(items), size):
         yield items[start:start + size]
 

@@ -10,7 +10,7 @@ import streamlit as st
 from PIL import Image
 
 from app_core.branding import DEFAULT_BRANDING, normalize_branding
-from firebase_config import db
+from mongo_config import db
 
 log = logging.getLogger("financeiro_verdio.settings")
 BRANDING_DOCUMENT_PATH = ("settings", "branding")
@@ -26,7 +26,7 @@ def get_branding() -> dict[str, Any]:
         if document.exists:
             return normalize_branding(document.to_dict())
     except Exception:
-        log.exception("Falha ao carregar identidade visual do Firestore.")
+        log.exception("Falha ao carregar identidade visual do MongoDB.")
     return normalize_branding(DEFAULT_BRANDING)
 
 
@@ -64,7 +64,7 @@ def update_logo(raw_bytes: bytes, filename: str, *, sidebar: bool = False) -> tu
 
     if save_branding(branding):
         return True, None
-    return False, "Não foi possível salvar a logomarca no Firestore."
+    return False, "Não foi possível salvar a logomarca no MongoDB."
 
 
 def reset_logo(*, sidebar: bool = False) -> bool:
@@ -85,7 +85,7 @@ def reset_branding_colors() -> bool:
 
 
 def optimize_logo(raw_bytes: bytes) -> tuple[bytes, str]:
-    """Redimensiona e comprime uma logomarca para caber com folga no documento Firestore."""
+    """Redimensiona e comprime uma logomarca para caber com folga no documento MongoDB."""
     image = Image.open(io.BytesIO(raw_bytes))
     image.load()
     image.thumbnail((MAX_LOGO_WIDTH, MAX_LOGO_HEIGHT), Image.Resampling.LANCZOS)

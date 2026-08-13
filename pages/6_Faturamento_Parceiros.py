@@ -12,7 +12,7 @@ import streamlit as st
 # Adiciona o diretório raiz ao path para importar módulos do projeto
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from app_core.ui import apply_branding, render_sidebar
-from firebase_config import db
+from mongo_config import db
 import user_management_db as umdb
 
 # --- CLASSE PARA GERAR PDF ---
@@ -46,7 +46,7 @@ if "user_info" not in st.session_state:
 
 render_sidebar()
 
-# --- FUNÇÕES DE BANCO DE DADOS (FIREBASE) ---
+# --- FUNÇÕES DE BANCO DE DADOS (MONGODB) ---
 def get_regras_parceiros():
     try:
         docs = db.collection("regras_parceiros").stream()

@@ -8,11 +8,10 @@ import unicodedata
 from datetime import date, datetime, timezone
 from typing import Any, Iterable
 
-from firebase_admin import firestore
 
-from firebase_config import db
+from mongo_config import db
 
-FIRESTORE_BATCH_LIMIT = 420
+DB_BATCH_LIMIT = 420
 MONTHS_PT = {
     "janeiro": 1,
     "fevereiro": 2,
@@ -73,7 +72,7 @@ def _safe_int(value: Any, default: int = 0) -> int:
 
 
 def _serialize(value: Any) -> Any:
-    """Converte tipos comuns de pandas/numpy/datetime para valores aceitos pelo Firestore e JSON."""
+    """Converte tipos comuns de pandas/numpy/datetime para valores aceitos pelo MongoDB e JSON."""
     if value is None:
         return None
     if isinstance(value, datetime):
@@ -201,8 +200,8 @@ def billing_payload_hash(summary: dict[str, Any], details: list[dict[str, Any]] 
 
 
 
-def prepare_history_details(details: list[dict[str, Any]] | None, max_bytes: int = 650_000) -> tuple[list[dict[str, Any]], bool]:
-    """Mantém billing_history abaixo do limite de documento do Firestore.
+def prepare_history_details(details: list[dict[str, Any]] | None, max_bytes: int = 8_000_000) -> tuple[list[dict[str, Any]], bool]:
+    """Mantém billing_history com margem abaixo do limite de 16 MB do MongoDB.
 
     A cópia completa sempre fica em billing_runs/{run_id}/items e em snapshots.
     billing_history mantém os itens somente quando couberem com margem de segurança.
@@ -217,7 +216,7 @@ def prepare_history_details(details: list[dict[str, Any]] | None, max_bytes: int
         return safe_details, False
     return [], bool(safe_details)
 
-def _chunks(items: list[Any], size: int = FIRESTORE_BATCH_LIMIT) -> Iterable[list[Any]]:
+def _chunks(items: list[Any], size: int = DB_BATCH_LIMIT) -> Iterable[list[Any]]:
     for start in range(0, len(items), size):
         yield items[start:start + size]
 
@@ -342,7 +341,7 @@ def persist_billing_analytics(
 
         for chunk_index, chunk in enumerate(_chunks(normalized_items)):
             batch = db.batch()
-            offset = chunk_index * FIRESTORE_BATCH_LIMIT
+            offset = chunk_index * DB_BATCH_LIMIT
             for local_index, item in enumerate(chunk):
                 item_index = offset + local_index
                 item_doc = dict(item)

@@ -33,7 +33,7 @@ branding = normalize_branding(get_branding())
 tab_brand, tab_logos, tab_preview = st.tabs(["Marca e cores", "Logomarcas", "Pré-visualização"])
 
 with tab_brand:
-    st.caption("As configurações ficam armazenadas no Firestore e são aplicadas em todas as páginas após o salvamento.")
+    st.caption("As configurações ficam armazenadas no MongoDB e são aplicadas em todas as páginas após o salvamento.")
 
     with st.form("branding_form"):
         st.markdown("#### Identificação")

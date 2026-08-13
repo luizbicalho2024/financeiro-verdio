@@ -5,7 +5,7 @@ from typing import Any
 
 import streamlit as st
 
-from firebase_config import db, get_auth_admin_client
+from mongo_config import db, get_auth_admin_client
 
 log = logging.getLogger("financeiro_verdio.auth")
 auth_admin = get_auth_admin_client()
@@ -43,7 +43,7 @@ def get_all_users() -> list[dict[str, Any]]:
             )
         return sorted(all_users, key=lambda item: str(item.get("email") or "").lower())
     except Exception:
-        log.exception("Erro ao carregar usuários do Firebase Authentication.")
+        log.exception("Erro ao carregar usuários do autenticação MongoDB.")
         st.error("Não foi possível carregar os usuários. Consulte os logs do aplicativo.")
         return []
 
@@ -79,7 +79,7 @@ def create_new_user(email: str, password: str, role: str) -> bool:
         if "email_already_exists" in message or "email already exists" in message:
             st.error("Já existe um usuário com este e-mail.")
         elif "invalid_grant" in message or "jwt" in message:
-            st.error("As credenciais administrativas do Firebase precisam ser renovadas.")
+            st.error("As credenciais administrativas do MongoDB precisam ser renovadas.")
         else:
             st.error("Não foi possível criar o usuário. Consulte os logs do aplicativo.")
         return False
