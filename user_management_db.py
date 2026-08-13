@@ -331,39 +331,86 @@ def get_tracker_inventory() -> list[dict[str, Any]]:
         return []
 
 
-def update_tracker_inventory(df: pd.DataFrame) -> int | None:
+def update_tracker_inventory(
+    df: pd.DataFrame,
+    source_file: str | None = None,
+) -> int | None:
     try:
         records: list[tuple[str, dict[str, Any]]] = []
+        now = datetime.now(timezone.utc)
+
+        extra_fields = [
+            "Gateway",
+            "P/ Entrada",
+            "Status",
+            "Tipo Equipamento Origem",
+            "Situação",
+        ]
+
+        def clean_value(value: Any) -> Any:
+            if value is None:
+                return ""
+            try:
+                if pd.isna(value):
+                    return ""
+            except Exception:
+                pass
+            text = str(value).strip()
+            return "" if text.lower() in {"nan", "nat", "none"} else text
+
         for _, row in df.iterrows():
-            serial_number = str(row.get("Nº Equipamento", "") or "").strip()
-            if not serial_number or serial_number.lower() == "nan":
-                continue
-            records.append(
-                (
-                    serial_number,
-                    {
-                        "Nº Equipamento": serial_number,
-                        "Modelo": str(row.get("Modelo", "") or "").strip(),
-                        "Tipo": str(row.get("Tipo", "") or "").upper().strip(),
-                        "updated_at": datetime.now(timezone.utc),
-                    },
-                )
+            serial_number = clean_value(
+                row.get("Nº Equipamento", "")
             )
+
+            if not serial_number:
+                continue
+
+            data: dict[str, Any] = {
+                "Nº Equipamento": serial_number,
+                "Modelo": clean_value(row.get("Modelo", "")),
+                "Tipo": clean_value(row.get("Tipo", "")).upper(),
+                "updated_at": now,
+            }
+
+            for field in extra_fields:
+                if field in df.columns:
+                    data[field] = clean_value(row.get(field, ""))
+
+            if source_file:
+                data["source_file"] = str(source_file).strip()
+                data["source_updated_at"] = now
+
+            records.append((serial_number, data))
 
         for chunk in _chunks(records):
             batch = db.batch()
             for serial_number, data in chunk:
-                reference = db.collection("trackers").document(serial_number)
+                reference = db.collection("trackers").document(
+                    serial_number
+                )
                 batch.set(reference, data, merge=True)
             batch.commit()
 
         get_tracker_inventory.clear()
         get_unique_models_and_types.clear()
-        log_action("INFO", _current_user_email(), "Inventário de rastreadores atualizado.", {"registros": len(records)})
+
+        log_action(
+            "INFO",
+            _current_user_email(),
+            "Inventário de rastreadores atualizado.",
+            {
+                "registros": len(records),
+                "arquivo_origem": source_file or "",
+            },
+        )
         return len(records)
+
     except Exception:
         log.exception("Erro ao atualizar inventário de rastreadores.")
-        st.error("Não foi possível salvar o inventário no banco de dados.")
+        st.error(
+            "Não foi possível salvar o inventário no banco de dados."
+        )
         return None
 
 

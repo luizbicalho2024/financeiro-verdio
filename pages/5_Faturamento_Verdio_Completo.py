@@ -626,96 +626,455 @@ def salvar_historico_lote(df_aprovado, periodo_relatorio):
         st.success(f"{success_count} clientes salvos e mês fechado para análise comercial.")
     return bool(closed)
 
-
 # --- 4. INTERFACE ---
 st.subheader("FINANCEIRO - Processamento de Faturamento em Lote Verdio")
-st.info("O sistema calcula automaticamente com base nos contratos cadastrados. O resumo agrupa todos os dados em uma única linha por cliente.")
+st.info(
+    "Envie uma ou várias planilhas. Cada arquivo é processado de forma independente, "
+    "o período é identificado automaticamente e os resultados são agrupados por mês. "
+    "Isso permite carregar vários meses históricos de uma única vez."
+)
 
-uploaded_file = st.file_uploader("Selecione o relatório consolidado", type=["xls", "xlsx", "csv"])
+uploaded_files = st.file_uploader(
+    "Selecione um ou mais relatórios de faturamento",
+    type=["xls", "xlsx", "csv"],
+    accept_multiple_files=True,
+    key="billing_multi_files",
+)
+
 st.markdown("---")
 
-if uploaded_file:
+
+def _period_sort_key(period_label: str):
+    normalized_months = {
+        _strip_accents(name).lower(): month
+        for month, name in MESES_PT.items()
+    }
+    match = re.match(
+        r"^\s*([A-Za-zÀ-ÿ]+)\s+de\s+(\d{4})\s*$",
+        str(period_label or ""),
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        return (9999, 99, str(period_label or ""))
+
+    month_name = _strip_accents(match.group(1)).lower()
+    return (
+        int(match.group(2)),
+        normalized_months.get(month_name, 99),
+        str(period_label or ""),
+    )
+
+
+def _safe_widget_key(value: str) -> str:
+    return re.sub(
+        r"[^A-Za-z0-9_]+",
+        "_",
+        str(value or ""),
+    ).strip("_")[:100]
+
+
+def processar_arquivos_historicos(files, tracker_inventory):
+    grouped = {}
+    errors = []
+
+    for uploaded in files:
+        periodo, frame, not_found, error = processar_planilha_lote(
+            uploaded.getvalue(),
+            uploaded.name,
+            tracker_inventory,
+        )
+
+        if error or frame is None or frame.empty:
+            errors.append(
+                {
+                    "Arquivo": uploaded.name,
+                    "Erro": error or "Nenhum registro faturável encontrado.",
+                }
+            )
+            continue
+
+        bucket = grouped.setdefault(
+            periodo,
+            {
+                "frames": [],
+                "files": [],
+                "not_found": set(),
+            },
+        )
+        bucket["frames"].append(frame)
+        bucket["files"].append(uploaded.name)
+        bucket["not_found"].update(not_found or [])
+
+    processed = {}
+
+    for periodo, bucket in grouped.items():
+        combined = pd.concat(
+            bucket["frames"],
+            ignore_index=True,
+        )
+
+        dedup_columns = [
+            column
+            for column in [
+                "Cliente",
+                "Terminal",
+                "Nº Equipamento",
+            ]
+            if column in combined.columns
+        ]
+
+        duplicates_removed = 0
+        if dedup_columns:
+            before = len(combined)
+            combined = combined.drop_duplicates(
+                subset=dedup_columns,
+                keep="last",
+            ).reset_index(drop=True)
+            duplicates_removed = before - len(combined)
+
+        processed[periodo] = {
+            "df": combined,
+            "files": bucket["files"],
+            "not_found": sorted(bucket["not_found"]),
+            "duplicates_removed": int(duplicates_removed),
+        }
+
+    return processed, errors
+
+
+if uploaded_files:
     tracker_inventory = umdb.get_tracker_inventory()
+
     if not tracker_inventory:
-        st.warning("⚠️ Estoque vazio.")
+        st.warning(
+            "O estoque está vazio. Importe o estoque antes de processar o faturamento."
+        )
         st.stop()
 
-    periodo, df_final, not_found, error = processar_planilha_lote(uploaded_file.getvalue(), uploaded_file.name, tracker_inventory)
+    with st.spinner(
+        f"Processando {len(uploaded_files)} arquivo(s) e identificando os períodos..."
+    ):
+        processed_periods, processing_errors = processar_arquivos_historicos(
+            uploaded_files,
+            tracker_inventory,
+        )
 
-    if error:
-        st.error(error)
-    elif df_final is not None:
-        if not_found:
-            with st.expander("⚠️ Equipamentos Não Encontrados no Estoque", expanded=True):
-                st.warning("Os equipamentos abaixo ficaram com valor zerado para evitar cobrança indevida. Cadastre-os no estoque e recalcule se devem ser faturados.")
-                st.json(not_found)
-
-        if "Faturar" not in df_final.columns:
-            df_final.insert(0, "Faturar", True)
-
-        st.subheader("Revisão do Lote")
-        edited_df = st.data_editor(
-            df_final,
-            column_config={
-                "Faturar": st.column_config.CheckboxColumn("Faturar?", default=True),
-                "Cliente": st.column_config.TextColumn(disabled=True),
-                "Terminal": st.column_config.TextColumn(disabled=True),
-                "Nº Equipamento": st.column_config.TextColumn(disabled=True),
-                "Modelo": st.column_config.TextColumn(disabled=True),
-                "Tipo": st.column_config.TextColumn(disabled=True),
-                "Categoria": st.column_config.TextColumn(disabled=True),
-                "Dias a Faturar": st.column_config.NumberColumn(disabled=True),
-                "Valor Unitario": st.column_config.NumberColumn(format="R$ %.2f", disabled=True),
-                "Valor a Faturar": st.column_config.NumberColumn(format="R$ %.2f", disabled=True),
-            },
-            hide_index=True,
+    if processing_errors:
+        st.error(
+            f"{len(processing_errors)} arquivo(s) não puderam ser processados."
+        )
+        st.dataframe(
+            pd.DataFrame(processing_errors),
             use_container_width=True,
-            key="editor_lote_verdio_corrigido",
+            hide_index=True,
         )
 
-        df_aprovado = edited_df[edited_df["Faturar"] == True].copy()
-        totais_gerais = build_totals(df_aprovado)
+    if not processed_periods:
+        st.warning("Nenhum período válido foi processado.")
+        st.stop()
 
-        st.markdown("---")
-        st.header("Resumo Geral do Lote")
-        st.caption(f"Período: {periodo}")
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Clientes no lote", df_aprovado["Cliente"].nunique())
-        c2.metric("Terminais faturados", len(df_aprovado))
-        c3.metric("Valor total", _money_br(totais_gerais["geral"]))
+    ordered_periods = sorted(
+        processed_periods,
+        key=_period_sort_key,
+    )
 
-        resumo_clientes = []
-        for cliente, df_cliente in df_aprovado.groupby("Cliente"):
-            t = build_totals(df_cliente)
-            resumo_clientes.append({
-                "Cliente": cliente,
-                "Cheio": t["terminais_cheio"],
-                "Proporcional": t["terminais_proporcional"],
-                "Suspensos": t["terminais_suspensos"],
-                "GPRS": t["terminais_gprs"],
-                "Satelitais": t["terminais_satelitais"],
-                "Valor_Total": t["geral"],
-            })
-        st.dataframe(pd.DataFrame(resumo_clientes).sort_values("Cliente") if resumo_clientes else pd.DataFrame(), use_container_width=True, hide_index=True)
+    total_rows = sum(
+        len(processed_periods[periodo]["df"])
+        for periodo in ordered_periods
+    )
+    total_clients = sum(
+        processed_periods[periodo]["df"]["Cliente"].nunique()
+        for periodo in ordered_periods
+    )
 
-        st.markdown("---")
-        st.subheader("Ações Finais")
-        if st.button("💾 Salvar Histórico de Todos os Clientes"):
-            salvar_historico_lote(df_aprovado, periodo)
-            st.success("Histórico do lote salvo com sucesso.")
+    k1, k2, k3, k4 = st.columns(4)
+    k1.metric("Arquivos enviados", len(uploaded_files))
+    k2.metric("Meses identificados", len(ordered_periods))
+    k3.metric("Registros processados", total_rows)
+    k4.metric("Clientes/mês", total_clients)
 
-        col1, col2 = st.columns(2)
-        col1.download_button(
-            "📊 Baixar Excel",
-            generate_master_excel(df_aprovado),
-            f"Faturamento_Lote_{periodo.replace(' ', '_')}.xlsx",
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    st.markdown("### Resumo da carga")
+
+    summary_rows = []
+    for periodo in ordered_periods:
+        info = processed_periods[periodo]
+        frame = info["df"]
+        totals = build_totals(frame)
+
+        summary_rows.append(
+            {
+                "Período": periodo,
+                "Arquivos": len(info["files"]),
+                "Clientes": int(frame["Cliente"].nunique()),
+                "Terminais": int(len(frame)),
+                "Não encontrados": len(info["not_found"]),
+                "Duplicados removidos": info["duplicates_removed"],
+                "Valor calculado": float(totals["geral"]),
+            }
         )
-        col2.download_button(
-            "📁 Baixar PDFs (ZIP)",
-            create_zip_of_pdfs(df_aprovado, periodo),
-            f"PDFs_{periodo.replace(' ', '_')}.zip",
-            "application/zip",
-        )
+
+    st.dataframe(
+        pd.DataFrame(summary_rows),
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "Valor calculado": st.column_config.NumberColumn(
+                "Valor calculado",
+                format="R$ %.2f",
+            ),
+        },
+    )
+
+    approved_by_period = {}
+
+    for periodo in ordered_periods:
+        info = processed_periods[periodo]
+        df_period = info["df"].copy()
+        key_suffix = _safe_widget_key(periodo)
+
+        with st.expander(
+            f"{periodo} · {len(df_period)} terminais · "
+            f"{df_period['Cliente'].nunique()} clientes",
+            expanded=len(ordered_periods) == 1,
+        ):
+            st.caption(
+                "Arquivo(s): " + ", ".join(info["files"])
+            )
+
+            if info["duplicates_removed"]:
+                st.warning(
+                    f"{info['duplicates_removed']} registro(s) duplicado(s) "
+                    "do mesmo cliente/terminal/equipamento foram consolidados."
+                )
+
+            if info["not_found"]:
+                st.warning(
+                    f"{len(info['not_found'])} equipamento(s) não foram encontrados "
+                    "no estoque e ficaram com faturamento zerado."
+                )
+                with st.expander(
+                    "Ver equipamentos não encontrados",
+                    expanded=False,
+                ):
+                    st.json(info["not_found"])
+
+            if "Faturar" not in df_period.columns:
+                df_period.insert(0, "Faturar", True)
+
+            edited_df = st.data_editor(
+                df_period,
+                column_config={
+                    "Faturar": st.column_config.CheckboxColumn(
+                        "Faturar?",
+                        default=True,
+                    ),
+                    "Cliente": st.column_config.TextColumn(disabled=True),
+                    "Terminal": st.column_config.TextColumn(disabled=True),
+                    "Nº Equipamento": st.column_config.TextColumn(
+                        disabled=True
+                    ),
+                    "Modelo": st.column_config.TextColumn(disabled=True),
+                    "Tipo": st.column_config.TextColumn(disabled=True),
+                    "Categoria": st.column_config.TextColumn(
+                        disabled=True
+                    ),
+                    "Dias a Faturar": st.column_config.NumberColumn(
+                        disabled=True
+                    ),
+                    "Valor Unitario": st.column_config.NumberColumn(
+                        format="R$ %.2f",
+                        disabled=True,
+                    ),
+                    "Valor a Faturar": st.column_config.NumberColumn(
+                        format="R$ %.2f",
+                        disabled=True,
+                    ),
+                },
+                hide_index=True,
+                use_container_width=True,
+                height=430,
+                key=f"editor_lote_{key_suffix}",
+            )
+
+            df_approved = edited_df[
+                edited_df["Faturar"] == True
+            ].copy()
+            approved_by_period[periodo] = df_approved
+
+            totals = build_totals(df_approved)
+
+            c1, c2, c3 = st.columns(3)
+            c1.metric(
+                "Clientes",
+                int(df_approved["Cliente"].nunique()),
+            )
+            c2.metric(
+                "Terminais faturados",
+                int(len(df_approved)),
+            )
+            c3.metric(
+                "Valor total",
+                _money_br(totals["geral"]),
+            )
+
+            client_summary = []
+            for cliente, df_client in df_approved.groupby("Cliente"):
+                client_totals = build_totals(df_client)
+                client_summary.append(
+                    {
+                        "Cliente": cliente,
+                        "Cheio": client_totals["terminais_cheio"],
+                        "Proporcional": client_totals[
+                            "terminais_proporcional"
+                        ],
+                        "Suspensos": client_totals[
+                            "terminais_suspensos"
+                        ],
+                        "GPRS": client_totals["terminais_gprs"],
+                        "Satelitais": client_totals[
+                            "terminais_satelitais"
+                        ],
+                        "Valor Total": client_totals["geral"],
+                    }
+                )
+
+            if client_summary:
+                st.dataframe(
+                    pd.DataFrame(client_summary).sort_values("Cliente"),
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "Valor Total": st.column_config.NumberColumn(
+                            "Valor Total",
+                            format="R$ %.2f",
+                        ),
+                    },
+                )
+
+            col_save, col_excel, col_pdf = st.columns(3)
+
+            if col_save.button(
+                f"Salvar {periodo}",
+                key=f"save_period_{key_suffix}",
+                type="primary",
+                use_container_width=True,
+            ):
+                if df_approved.empty:
+                    st.warning("Não há registros aprovados neste período.")
+                elif salvar_historico_lote(
+                    df_approved,
+                    periodo,
+                ):
+                    st.success(f"{periodo} salvo e fechado.")
+
+            col_excel.download_button(
+                "Baixar Excel",
+                generate_master_excel(df_approved),
+                f"Faturamento_Lote_{periodo.replace(' ', '_')}.xlsx",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key=f"excel_period_{key_suffix}",
+                use_container_width=True,
+            )
+
+            col_pdf.download_button(
+                "Baixar PDFs (ZIP)",
+                create_zip_of_pdfs(
+                    df_approved,
+                    periodo,
+                ),
+                f"PDFs_{periodo.replace(' ', '_')}.zip",
+                "application/zip",
+                key=f"pdf_period_{key_suffix}",
+                use_container_width=True,
+            )
+
+    st.markdown("---")
+    st.subheader("Carga histórica em massa")
+
+    st.warning(
+        "Ao salvar todos os períodos, cada mês será gravado separadamente no histórico "
+        "e receberá seu próprio fechamento mensal. Faturamentos idênticos já existentes "
+        "não criam revisão duplicada."
+    )
+
+    confirm_bulk = st.checkbox(
+        f"Confirmo o salvamento de {len(ordered_periods)} período(s) no histórico.",
+        key="confirm_bulk_history",
+    )
+
+    if st.button(
+        "Salvar todos os períodos processados",
+        type="primary",
+        use_container_width=True,
+        disabled=not confirm_bulk,
+        key="save_all_periods",
+    ):
+        successes = []
+        failures = []
+
+        progress = st.progress(0)
+        status = st.empty()
+
+        for index, periodo in enumerate(ordered_periods, start=1):
+            frame = approved_by_period.get(periodo)
+
+            status.write(
+                f"Salvando {periodo} ({index}/{len(ordered_periods)})..."
+            )
+
+            try:
+                if frame is None or frame.empty:
+                    failures.append(
+                        {
+                            "Período": periodo,
+                            "Motivo": "Nenhum registro aprovado.",
+                        }
+                    )
+                elif salvar_historico_lote(frame, periodo):
+                    successes.append(periodo)
+                else:
+                    failures.append(
+                        {
+                            "Período": periodo,
+                            "Motivo": "Falha ao salvar ou fechar o mês.",
+                        }
+                    )
+            except Exception as exc:
+                failures.append(
+                    {
+                        "Período": periodo,
+                        "Motivo": str(exc),
+                    }
+                )
+
+            progress.progress(index / len(ordered_periods))
+
+        status.empty()
+
+        if successes:
+            st.success(
+                f"{len(successes)} período(s) salvos com sucesso: "
+                + ", ".join(successes)
+            )
+
+        if failures:
+            st.error(
+                f"{len(failures)} período(s) apresentaram falha."
+            )
+            st.dataframe(
+                pd.DataFrame(failures),
+                use_container_width=True,
+                hide_index=True,
+            )
+        else:
+            st.balloons()
+            st.success(
+                "Carga histórica concluída. Os meses já estão disponíveis "
+                "para histórico, analytics e churn."
+            )
+
 else:
-    st.info("Aguardando o carregamento do relatório consolidado para iniciar a análise.")
+    st.info(
+        "Aguardando o carregamento dos relatórios. Você pode selecionar vários "
+        "arquivos de meses diferentes no mesmo envio."
+    )
