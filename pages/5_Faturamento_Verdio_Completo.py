@@ -147,6 +147,8 @@ def _read_raw_report(file_bytes: bytes, file_name: str = "") -> pd.DataFrame:
             except Exception:
                 continue
         return pd.read_csv(io.BytesIO(file_bytes), header=None, encoding="latin1", on_bad_lines="skip")
+    if lower_name.endswith(".xls"):
+        return pd.read_excel(io.BytesIO(file_bytes), header=None, engine="xlrd")
     return pd.read_excel(io.BytesIO(file_bytes), header=None, engine="openpyxl")
 
 
@@ -574,6 +576,14 @@ def create_zip_of_pdfs(df_aprovado, periodo_relatorio):
 
 
 def salvar_historico_lote(df_aprovado, periodo_relatorio):
+    success_count = 0
+    failed_clients = []
+    cols_to_save = [
+        "Terminal", "Nº Equipamento", "Placa", "Frota", "Modelo", "Tipo", "Condição", "Categoria",
+        "Data Ativação", "Data Desativação", "Dias Ativos Mês", "Dias Ativos Calculado",
+        "Suspenso Dias Mes", "Dias a Faturar", "Valor Unitario", "Valor a Faturar",
+    ]
+
     for cliente in sorted(df_aprovado["Cliente"].dropna().unique()):
         df_cliente = df_aprovado[df_aprovado["Cliente"] == cliente].copy()
         totais = build_totals(df_cliente)
@@ -589,17 +599,39 @@ def salvar_historico_lote(df_aprovado, periodo_relatorio):
             "valor_unitario_gprs": _safe_float(df_cliente[df_cliente["Tipo"] == "GPRS"]["Valor Unitario"].max()) if not df_cliente[df_cliente["Tipo"] == "GPRS"].empty else 0.0,
             "valor_unitario_satelital": _safe_float(df_cliente[df_cliente["Tipo"] == "SATELITE"]["Valor Unitario"].max()) if not df_cliente[df_cliente["Tipo"] == "SATELITE"].empty else 0.0,
         }
-        cols_to_save = ["Terminal", "Nº Equipamento", "Modelo", "Tipo", "Categoria", "Valor Unitario", "Valor a Faturar", "Dias Ativos Calculado", "Suspenso Dias Mes", "Dias a Faturar"]
-        detalhes_itens = _clean_export_df(df_cliente)[[c for c in cols_to_save if c in df_cliente.columns]].to_dict(orient="records")
-        umdb.log_faturamento(log_data, detalhes_itens)
-    st.session_state["lote_salvo"] = True
+        clean = _clean_export_df(df_cliente)
+        detalhes_itens = clean[[column for column in cols_to_save if column in clean.columns]].to_dict(orient="records")
+        if umdb.log_faturamento(log_data, detalhes_itens):
+            success_count += 1
+        else:
+            failed_clients.append(str(cliente))
+
+    if failed_clients:
+        st.session_state["lote_salvo"] = False
+        st.error(
+            "O lote não foi fechado porque alguns clientes falharam ao salvar: "
+            + ", ".join(failed_clients[:20])
+            + ("..." if len(failed_clients) > 20 else "")
+        )
+        return False
+
+    closed = umdb.close_billing_month(
+        periodo_relatorio,
+        total_clientes=int(df_aprovado["Cliente"].nunique()),
+        total_terminais=int(len(df_aprovado)),
+        faturamento_total=float(df_aprovado["Valor a Faturar"].sum()),
+    )
+    st.session_state["lote_salvo"] = bool(closed)
+    if closed:
+        st.success(f"{success_count} clientes salvos e mês fechado para análise comercial.")
+    return bool(closed)
 
 
 # --- 4. INTERFACE ---
 st.subheader("FINANCEIRO - Processamento de Faturamento em Lote Verdio")
 st.info("O sistema calcula automaticamente com base nos contratos cadastrados. O resumo agrupa todos os dados em uma única linha por cliente.")
 
-uploaded_file = st.file_uploader("Selecione o relatório consolidado", type=["xlsx", "csv"])
+uploaded_file = st.file_uploader("Selecione o relatório consolidado", type=["xls", "xlsx", "csv"])
 st.markdown("---")
 
 if uploaded_file:

@@ -95,7 +95,7 @@ def calcular_faturamento_cliente(df_cliente, report_month, report_year, inventor
     return df_merged['Valor Calculado'].sum()
 
 # --- INTERFACE DE UPLOAD ---
-uploaded_file = st.file_uploader("Suba a planilha global de terminais (.xlsx)", type=['xlsx'])
+uploaded_file = st.file_uploader("Suba a planilha global de terminais (.xlsx)", type=['xls', 'xlsx'])
 
 if uploaded_file:
     with st.spinner("Calculando faturamento global..."):

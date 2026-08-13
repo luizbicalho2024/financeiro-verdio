@@ -103,32 +103,81 @@ def get_last_billing_for_client(client_name: str) -> dict[str, Any] | None:
 
 
 def log_faturamento(faturamento_data: dict[str, Any], detalhes_itens: list[Any] | None = None) -> bool:
-    """Mantém um único registro por cliente/período sem apagar o registro anterior antes do novo estar salvo."""
+    """Salva o snapshot vigente e preserva revisões diferentes em uma trilha imutável.
+
+    Downloads repetidos do mesmo faturamento não criam novas revisões. Se os dados
+    mudarem para o mesmo cliente/período, uma nova revisão é criada em billing_runs
+    e billing_history passa a apontar para a versão vigente.
+    """
     try:
+        from app_core.billing_history_service import billing_payload_hash, persist_billing_analytics, prepare_history_details
+
         payload = dict(faturamento_data or {})
         cliente = str(payload.get("cliente") or "").strip()
         periodo = str(payload.get("periodo_relatorio") or "").strip()
         user_email = _current_user_email()
 
+        if not cliente or not periodo:
+            raise ValueError("Cliente e período são obrigatórios para salvar o faturamento.")
+
+        clean_details = detalhes_itens if isinstance(detalhes_itens, list) else []
+        snapshot_hash = billing_payload_hash(payload, clean_details)
+
+        existing_docs = list(
+            db.collection("billing_history")
+            .where("cliente", "==", cliente)
+            .where("periodo_relatorio", "==", periodo)
+            .stream()
+        )
+
+        primary_data: dict[str, Any] = {}
+        if existing_docs:
+            primary_data = existing_docs[0].to_dict() or {}
+            if str(primary_data.get("snapshot_hash") or "") == snapshot_hash:
+                log_action(
+                    "INFO",
+                    user_email,
+                    f"Faturamento idêntico já estava salvo para {cliente} ({periodo}).",
+                    {"cliente": cliente, "periodo": periodo, "snapshot_hash": snapshot_hash},
+                )
+                st.toast("Este faturamento já estava salvo; nenhuma revisão duplicada foi criada.", icon="✅")
+                return True
+
+        previous_revision = int(primary_data.get("revision", 1 if existing_docs else 0) or 0)
+        revision = previous_revision + 1
+        now = datetime.now(timezone.utc)
+
         payload.update(
             {
                 "cliente": cliente,
                 "periodo_relatorio": periodo,
-                "data_geracao": datetime.now(timezone.utc),
+                "data_geracao": now,
                 "gerado_por": user_email,
+                "revision": revision,
+                "snapshot_hash": snapshot_hash,
+                "schema_version": 2,
             }
         )
-        if detalhes_itens is not None and isinstance(detalhes_itens, list):
-            payload["itens_detalhados"] = detalhes_itens
+        history_details, details_external = prepare_history_details(clean_details)
+        if history_details:
+            payload["itens_detalhados"] = history_details
+        elif clean_details:
+            payload["itens_detalhados"] = []
+        payload["itens_em_subcolecao"] = bool(details_external)
+        payload["itens_detalhados_count"] = len(clean_details)
 
-        existing_docs = []
-        if cliente and periodo:
-            existing_docs = list(
-                db.collection("billing_history")
-                .where("cliente", "==", cliente)
-                .where("periodo_relatorio", "==", periodo)
-                .stream()
-            )
+        analytics_meta = persist_billing_analytics(
+            payload,
+            clean_details,
+            user_email=user_email,
+            revision=revision,
+            snapshot_hash=snapshot_hash,
+            create_run=True,
+            source="billing",
+        )
+        for key, value in analytics_meta.items():
+            if value is not None:
+                payload[key] = value
 
         if existing_docs:
             primary = existing_docs[0]
@@ -139,19 +188,114 @@ def log_faturamento(faturamento_data: dict[str, Any], detalhes_itens: list[Any] 
                 log_action(
                     "WARNING",
                     user_email,
-                    "Registros duplicados de faturamento foram consolidados.",
+                    "Registros duplicados de faturamento vigente foram consolidados.",
                     {"cliente": cliente, "periodo": periodo, "duplicados_removidos": len(existing_docs) - 1},
                 )
         else:
             db.collection("billing_history").add(payload)
 
         summary = {key: value for key, value in payload.items() if key != "itens_detalhados"}
-        log_action("INFO", user_email, f"Faturamento salvo para {cliente} ({periodo}).", summary)
-        st.toast("Histórico de faturamento salvo.", icon="✅")
+        log_action(
+            "INFO",
+            user_email,
+            f"Faturamento salvo para {cliente} ({periodo}) — revisão {revision}.",
+            summary,
+        )
+        st.toast(f"Histórico salvo — revisão {revision}.", icon="✅")
         return True
     except Exception:
         log.exception("Erro ao salvar histórico de faturamento.")
         st.error("Não foi possível salvar o histórico de faturamento.")
+        return False
+
+
+def get_billing_runs(limit: int = 5000) -> list[dict[str, Any]]:
+    try:
+        safe_limit = max(1, min(int(limit), 20000))
+        query = (
+            db.collection("billing_runs")
+            .order_by("data_geracao", direction="DESCENDING")
+            .limit(safe_limit)
+        )
+        runs: list[dict[str, Any]] = []
+        for document in query.stream():
+            data = document.to_dict() or {}
+            data.setdefault("run_id", document.id)
+            data["_id"] = document.id
+            runs.append(data)
+        return runs
+    except Exception:
+        log.exception("Erro ao buscar revisões imutáveis de faturamento.")
+        return []
+
+
+def get_billing_run_items(run_id: str, limit: int = 20000) -> list[dict[str, Any]]:
+    try:
+        safe_limit = max(1, min(int(limit), 50000))
+        query = (
+            db.collection("billing_runs")
+            .document(str(run_id))
+            .collection("items")
+            .order_by("item_index", direction="ASCENDING")
+            .limit(safe_limit)
+        )
+        items: list[dict[str, Any]] = []
+        for document in query.stream():
+            data = document.to_dict() or {}
+            data["_id"] = document.id
+            items.append(data)
+        return items
+    except Exception:
+        log.exception("Erro ao buscar itens da revisão %s.", run_id)
+        return []
+
+
+def rebuild_billing_analytics_from_history() -> dict[str, int] | None:
+    try:
+        from app_core.billing_history_service import rebuild_analytics_from_history
+
+        records = get_billing_history(limit=20000)
+        result = rebuild_analytics_from_history(records, user_email=_current_user_email())
+        log_action(
+            "INFO",
+            _current_user_email(),
+            "Base analítica de churn reconstruída a partir do histórico de faturamento.",
+            result,
+        )
+        return result
+    except Exception:
+        log.exception("Erro ao reconstruir analytics de faturamento.")
+        st.error("Não foi possível reconstruir a base analítica.")
+        return None
+
+
+def close_billing_month(
+    periodo_relatorio: str,
+    *,
+    total_clientes: int,
+    total_terminais: int,
+    faturamento_total: float,
+) -> bool:
+    try:
+        from app_core.billing_history_service import close_billing_month as _close_billing_month
+
+        payload = _close_billing_month(
+            periodo_relatorio,
+            total_clientes=total_clientes,
+            total_terminais=total_terminais,
+            faturamento_total=faturamento_total,
+            closed_by=_current_user_email(),
+        )
+        log_action(
+            "INFO",
+            _current_user_email(),
+            f"Fechamento mensal registrado para {periodo_relatorio}.",
+            payload,
+        )
+        return True
+    except Exception:
+        log.exception("Erro ao registrar fechamento mensal de %s.", periodo_relatorio)
+        st.error("O histórico foi salvo, mas não foi possível registrar o fechamento mensal.")
         return False
 
 

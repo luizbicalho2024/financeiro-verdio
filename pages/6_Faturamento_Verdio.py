@@ -146,6 +146,8 @@ def _read_raw_report(file_bytes: bytes, file_name: str = "") -> pd.DataFrame:
             except Exception:
                 continue
         return pd.read_csv(io.BytesIO(file_bytes), header=None, encoding="latin1", on_bad_lines="skip")
+    if lower_name.endswith(".xls"):
+        return pd.read_excel(io.BytesIO(file_bytes), header=None, engine="xlrd")
     return pd.read_excel(io.BytesIO(file_bytes), header=None, engine="openpyxl")
 
 
@@ -537,7 +539,7 @@ for equip_type in sorted(pricing_config.keys()):
 # --- 5. UPLOAD DO FICHEIRO ---
 st.subheader("Carregamento do Relatório de Terminais")
 st.info("Carregue o relatório de terminais exportado do sistema. O cabeçalho será detectado automaticamente, sem depender de linha fixa.")
-uploaded_file = st.file_uploader("Selecione o relatório", type=["xlsx", "csv"])
+uploaded_file = st.file_uploader("Selecione o relatório", type=["xls", "xlsx", "csv"])
 st.markdown("---")
 
 # --- 6. ANÁLISE E EXIBIÇÃO ---
@@ -621,7 +623,7 @@ if uploaded_file:
         st.markdown("---")
         st.subheader("Ações Finais")
 
-        cols_to_save = ["Terminal", "Nº Equipamento", "Modelo", "Tipo", "Categoria", "Valor Unitario", "Valor a Faturar", "Dias Ativos Calculado", "Suspenso Dias Mes", "Dias a Faturar"]
+        cols_to_save = ["Terminal", "Nº Equipamento", "Placa", "Frota", "Modelo", "Tipo", "Condição", "Categoria", "Data Ativação", "Data Desativação", "Dias Ativos Mês", "Dias Ativos Calculado", "Suspenso Dias Mes", "Dias a Faturar", "Valor Unitario", "Valor a Faturar"]
         detalhes_itens = _clean_export_df(df_aprovado)[[c for c in cols_to_save if c in df_aprovado.columns]].to_dict(orient="records")
         log_data = {
             "cliente": nome_cliente,
