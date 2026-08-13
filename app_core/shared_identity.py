@@ -93,7 +93,8 @@ def _effective_finance_access(user: dict[str, Any] | None) -> tuple[bool, str]:
 
 def ensure_shared_user_schema(database: Database | None = None) -> None:
     """Adiciona metadados de aplicações sem alterar credenciais ou identidade."""
-    database = database or get_mongo_client()[identity_database_name()]
+    if database is None:
+        database = get_mongo_client()[identity_database_name()]
     users = database["users"]
 
     try:
