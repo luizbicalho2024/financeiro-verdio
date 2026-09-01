@@ -10,6 +10,7 @@ from typing import Dict, List, Tuple, Optional
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from app_core.ui import apply_branding, render_sidebar
+from app_core.spreadsheet_reader import read_raw_spreadsheet
 
 import streamlit as st
 import pandas as pd
@@ -139,17 +140,7 @@ def sanitize_id(name: str) -> str:
 
 
 def _read_raw_report(file_bytes: bytes, file_name: str = "") -> pd.DataFrame:
-    lower_name = (file_name or "").lower()
-    if lower_name.endswith(".csv"):
-        for encoding in ("utf-8-sig", "utf-8", "latin1"):
-            try:
-                return pd.read_csv(io.BytesIO(file_bytes), header=None, sep=None, engine="python", encoding=encoding, on_bad_lines="skip")
-            except Exception:
-                continue
-        return pd.read_csv(io.BytesIO(file_bytes), header=None, encoding="latin1", on_bad_lines="skip")
-    if lower_name.endswith(".xls"):
-        return pd.read_excel(io.BytesIO(file_bytes), header=None, engine="xlrd")
-    return pd.read_excel(io.BytesIO(file_bytes), header=None, engine="openpyxl")
+    return read_raw_spreadsheet(file_bytes, file_name)
 
 
 def _find_header_row(df_raw: pd.DataFrame) -> Optional[int]:
