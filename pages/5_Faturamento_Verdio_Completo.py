@@ -234,7 +234,13 @@ def _prepare_inventory(tracker_inventory: List[dict]) -> pd.DataFrame:
     return df_inventory
 
 
-def _calculate_billing(df: pd.DataFrame, df_inventory: pd.DataFrame, report_date: pd.Timestamp, prices_by_type: Dict[str, float]) -> Tuple[str, pd.DataFrame, List[str]]:
+def _calculate_billing(
+    df: pd.DataFrame,
+    df_inventory: pd.DataFrame,
+    report_date: pd.Timestamp,
+    prices_by_type: Dict[str, float],
+    fallback_prices_by_type: Optional[Dict[str, float]] = None,
+) -> Tuple[str, pd.DataFrame, List[str]]:
     report_month = int(report_date.month)
     report_year = int(report_date.year)
     dias_no_mes = calendar.monthrange(report_year, report_month)[1]
@@ -293,8 +299,47 @@ def _calculate_billing(df: pd.DataFrame, df_inventory: pd.DataFrame, report_date
         ]
     )
 
-    normalized_prices = {_normalize_tipo(k): _safe_float(v) for k, v in (prices_by_type or {}).items()}
-    df_merged["Valor Unitario"] = df_merged["Tipo"].map(normalized_prices).fillna(0.0).astype(float)
+    contract_prices = {
+        _normalize_tipo(k): _safe_float(v)
+        for k, v in (prices_by_type or {}).items()
+    }
+    fallback_prices = {
+        _normalize_tipo(k): _safe_float(v)
+        for k, v in (fallback_prices_by_type or {}).items()
+    }
+
+    effective_prices: Dict[str, float] = {}
+    price_origins: Dict[str, str] = {}
+    known_types = set(df_merged["Tipo"].dropna().astype(str).tolist())
+    known_types.update(contract_prices.keys())
+    known_types.update(fallback_prices.keys())
+
+    for equipment_type in known_types:
+        equipment_type = _normalize_tipo(equipment_type)
+        if not equipment_type:
+            continue
+
+        contract_value = _safe_float(contract_prices.get(equipment_type), 0.0)
+        fallback_value = _safe_float(fallback_prices.get(equipment_type), 0.0)
+
+        if contract_value > 0:
+            effective_prices[equipment_type] = contract_value
+            price_origins[equipment_type] = "Contrato do cliente"
+        elif fallback_value > 0:
+            effective_prices[equipment_type] = fallback_value
+            price_origins[equipment_type] = "Média dos contratos cadastrados"
+        else:
+            effective_prices[equipment_type] = 0.0
+            price_origins[equipment_type] = "Sem preço de referência"
+
+    df_merged["Valor Unitario"] = (
+        df_merged["Tipo"].map(effective_prices).fillna(0.0).astype(float)
+    )
+    df_merged["Origem Preço"] = (
+        df_merged["Tipo"]
+        .map(price_origins)
+        .fillna("Sem preço de referência")
+    )
 
     ativacao = df_merged["Data Ativação"]
     desativacao = df_merged["Data Desativação"]
@@ -368,7 +413,7 @@ def _clean_export_df(df: pd.DataFrame) -> pd.DataFrame:
     preferred = [
         "Cliente", "Terminal", "Nº Equipamento", "Placa", "Modelo", "Tipo", "Condição", "Categoria",
         "Data Ativação", "Data Desativação", "Dias Ativos Mês", "Dias Ativos Calculado",
-        "Suspenso Dias Mes", "Dias a Faturar", "Valor Unitario", "Valor a Faturar",
+        "Suspenso Dias Mes", "Dias a Faturar", "Valor Unitario", "Origem Preço", "Valor a Faturar",
     ]
     cols = [c for c in preferred if c in df.columns] + [c for c in df.columns if c not in preferred]
     return df[cols]
@@ -536,34 +581,67 @@ if "user_info" not in st.session_state:
 render_sidebar()
 
 
-def _load_contract_prices() -> Dict[str, Dict[str, float]]:
+def _load_contract_prices() -> Tuple[
+    Dict[str, Dict[str, float]],
+    Dict[str, float],
+]:
     docs = db.collection("client_contracts").stream()
     contracts = {doc.id: doc.to_dict() for doc in docs}
-    result = {}
+
+    result: Dict[str, Dict[str, float]] = {}
+    samples_by_type: Dict[str, List[float]] = {}
+
     for doc_id, data in contracts.items():
         client_name = str(data.get("cliente", doc_id)).strip()
         prices = data.get("precos_por_tipo", {}) or {}
-        normalized = {_normalize_tipo(k): _safe_float(v) for k, v in prices.items()}
+        normalized = {
+            _normalize_tipo(k): _safe_float(v)
+            for k, v in prices.items()
+        }
+
         result[client_name] = normalized
         result[sanitize_id(client_name)] = normalized
-    return result
+
+        for equipment_type, value in normalized.items():
+            if equipment_type and value > 0:
+                samples_by_type.setdefault(equipment_type, []).append(value)
+
+    average_prices = {
+        equipment_type: round(sum(values) / len(values), 2)
+        for equipment_type, values in samples_by_type.items()
+        if values
+    }
+
+    return result, average_prices
 
 
 @st.cache_data(show_spinner=False)
-def processar_planilha_lote(file_bytes, file_name, tracker_inventory):
+def processar_planilha_lote(
+    file_bytes,
+    file_name,
+    tracker_inventory,
+    contracts,
+    average_contract_prices,
+):
     try:
         df, report_date = _prepare_report_dataframe(file_bytes, file_name)
         df_inventory = _prepare_inventory(tracker_inventory)
-        contracts = _load_contract_prices()
 
-        # Calcula cliente por cliente para respeitar preço contratado individual.
+        # Calcula cliente por cliente. Quando não houver preço contratado,
+        # a média dos contratos existentes para o mesmo Tipo é usada como referência.
         frames = []
         not_found_all = set()
         periodo_relatorio = None
         for cliente, df_cliente in df.groupby("Cliente", dropna=False):
             cliente = str(cliente).strip()
             prices = contracts.get(cliente) or contracts.get(sanitize_id(cliente)) or {}
-            periodo_relatorio, df_calc, not_found = _calculate_billing(df_cliente.copy(), df_inventory, report_date, prices)
+            periodo_relatorio, df_calc, not_found = _calculate_billing(
+                df_cliente.copy(),
+                df_inventory,
+                report_date,
+                prices,
+                average_contract_prices,
+            )
             frames.append(df_calc)
             not_found_all.update(not_found)
 
@@ -617,7 +695,7 @@ def salvar_historico_lote(df_aprovado, periodo_relatorio):
     cols_to_save = [
         "Terminal", "Nº Equipamento", "Placa", "Frota", "Modelo", "Tipo", "Condição", "Categoria",
         "Data Ativação", "Data Desativação", "Dias Ativos Mês", "Dias Ativos Calculado",
-        "Suspenso Dias Mes", "Dias a Faturar", "Valor Unitario", "Valor a Faturar",
+        "Suspenso Dias Mes", "Dias a Faturar", "Valor Unitario", "Origem Preço", "Valor a Faturar",
     ]
 
     for cliente in sorted(df_aprovado["Cliente"].dropna().unique()):
@@ -640,14 +718,27 @@ def salvar_historico_lote(df_aprovado, periodo_relatorio):
         if umdb.log_faturamento(log_data, detalhes_itens, notify=False):
             success_count += 1
         else:
-            failed_clients.append(str(cliente))
+            failed_clients.append(
+                {
+                    "Cliente": str(cliente),
+                    "Erro": (
+                        umdb.get_last_billing_save_error()
+                        or "Falha de persistência sem detalhe retornado."
+                    ),
+                }
+            )
 
     if failed_clients:
         st.session_state["lote_salvo"] = False
         st.error(
-            "O lote não foi fechado porque alguns clientes falharam ao salvar: "
-            + ", ".join(failed_clients[:20])
-            + ("..." if len(failed_clients) > 20 else "")
+            f"O lote não foi fechado porque {len(failed_clients)} cliente(s) "
+            "falharam ao salvar."
+        )
+        st.dataframe(
+            pd.DataFrame(failed_clients),
+            use_container_width=True,
+            hide_index=True,
+            height=min(420, 42 + (len(failed_clients) * 35)),
         )
         return False
 
@@ -709,7 +800,12 @@ def _safe_widget_key(value: str) -> str:
     ).strip("_")[:100]
 
 
-def _billing_batch_signature(files, tracker_inventory) -> str:
+def _billing_batch_signature(
+    files,
+    tracker_inventory,
+    contracts,
+    average_contract_prices,
+) -> str:
     digest = hashlib.sha256()
 
     for uploaded in files:
@@ -732,6 +828,24 @@ def _billing_batch_signature(files, tracker_inventory) -> str:
                 "utf-8",
                 errors="ignore",
             )
+        )
+
+    for client_name in sorted((contracts or {}).keys()):
+        client_prices = contracts.get(client_name) or {}
+        for equipment_type in sorted(client_prices.keys()):
+            digest.update(
+                (
+                    f"contract|{client_name}|{equipment_type}|"
+                    f"{_safe_float(client_prices.get(equipment_type)):.6f}\n"
+                ).encode("utf-8", errors="ignore")
+            )
+
+    for equipment_type in sorted((average_contract_prices or {}).keys()):
+        digest.update(
+            (
+                f"average|{equipment_type}|"
+                f"{_safe_float(average_contract_prices.get(equipment_type)):.6f}\n"
+            ).encode("utf-8", errors="ignore")
         )
 
     return digest.hexdigest()
@@ -826,7 +940,12 @@ def _clear_billing_batch_cache() -> None:
         st.session_state.pop(key, None)
 
 
-def processar_arquivos_historicos(files, tracker_inventory):
+def processar_arquivos_historicos(
+    files,
+    tracker_inventory,
+    contracts,
+    average_contract_prices,
+):
     grouped = {}
     errors = []
 
@@ -835,6 +954,8 @@ def processar_arquivos_historicos(files, tracker_inventory):
             uploaded.getvalue(),
             uploaded.name,
             tracker_inventory,
+            contracts,
+            average_contract_prices,
         )
 
         if error or frame is None or frame.empty:
@@ -897,6 +1018,7 @@ def processar_arquivos_historicos(files, tracker_inventory):
 
 if uploaded_files:
     tracker_inventory = umdb.get_tracker_inventory()
+    contracts, average_contract_prices = _load_contract_prices()
 
     if not tracker_inventory:
         st.warning(
@@ -907,6 +1029,8 @@ if uploaded_files:
     batch_signature = _billing_batch_signature(
         uploaded_files,
         tracker_inventory,
+        contracts,
+        average_contract_prices,
     )
     batch_cache = st.session_state.get("billing_processed_batch_cache")
 
@@ -927,6 +1051,8 @@ if uploaded_files:
             processed_periods, processing_errors = processar_arquivos_historicos(
                 uploaded_files,
                 tracker_inventory,
+                contracts,
+                average_contract_prices,
             )
 
         st.session_state["billing_processed_batch_cache"] = {
@@ -1002,9 +1128,46 @@ if uploaded_files:
                 "Terminais": int(len(frame)),
                 "Não encontrados": len(info["not_found"]),
                 "Duplicados removidos": info["duplicates_removed"],
+                "Com preço médio": int(
+                    frame["Origem Preço"].eq(
+                        "Média dos contratos cadastrados"
+                    ).sum()
+                )
+                if "Origem Preço" in frame.columns
+                else 0,
                 "Valor calculado": float(totals["geral"]),
             }
         )
+
+    if average_contract_prices:
+        with st.expander(
+            "Valores médios usados como fallback",
+            expanded=False,
+        ):
+            st.caption(
+                "Calculados apenas com preços maiores que zero dos contratos "
+                "cadastrados. O preço específico do cliente sempre tem prioridade."
+            )
+            average_rows = [
+                {
+                    "Tipo": equipment_type,
+                    "Preço médio": value,
+                }
+                for equipment_type, value in sorted(
+                    average_contract_prices.items()
+                )
+            ]
+            st.dataframe(
+                pd.DataFrame(average_rows),
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "Preço médio": st.column_config.NumberColumn(
+                        "Preço médio",
+                        format="R$ %.2f",
+                    ),
+                },
+            )
 
     st.dataframe(
         pd.DataFrame(summary_rows),
