@@ -79,6 +79,25 @@ def _mongo_safe(value: Any) -> Any:
     return str(value)
 
 
+def _subcollection_storage_id(
+    collection_name: str,
+    parent_collection: str | None,
+    parent_id: str | None,
+    document_id: str,
+) -> str:
+    # Gera um _id físico globalmente único para documentos de subcoleção.
+    logical_id = str(document_id)
+    if parent_id is None:
+        return logical_id
+
+    raw = (
+        f"{str(parent_collection or '')}|{str(parent_id)}|"
+        f"{str(collection_name)}|{logical_id}"
+    ).encode("utf-8")
+    digest = hashlib.sha256(raw).hexdigest()
+    return f"subdoc_{digest}"
+
+
 def _public_document(document: dict[str, Any] | None) -> dict[str, Any]:
     if not document:
         return {}
@@ -279,7 +298,10 @@ class MongoQuery:
         if self.limit_value is not None:
             cursor = cursor.limit(self.limit_value)
         for document in cursor:
-            doc_id = str(document.get("_id"))
+            doc_id = str(
+                document.get("__mongo_document_id")
+                or document.get("_id")
+            )
             ref = MongoDocumentReference(
                 self.database,
                 self.collection_name,
@@ -325,12 +347,37 @@ class MongoDocumentReference:
         self.parent_id = parent_id
         self.parent_collection = parent_collection
 
-    def _filter(self) -> dict[str, Any]:
-        query: dict[str, Any] = {"_id": self.id}
+    def _storage_id(self) -> str:
+        return _subcollection_storage_id(
+            self.collection_name,
+            self.parent_collection,
+            self.parent_id,
+            self.id,
+        )
+
+    def _parent_filter(self) -> dict[str, Any]:
+        query: dict[str, Any] = {}
         if self.parent_id is not None:
             query["__mongo_parent_id"] = self.parent_id
             query["__mongo_parent_collection"] = self.parent_collection
         return query
+
+    def _filter(self) -> dict[str, Any]:
+        if self.parent_id is None:
+            return {"_id": self.id}
+
+        query = self._parent_filter()
+        query["_id"] = {"$in": [self._storage_id(), self.id]}
+        return query
+
+    def _existing_storage_id(self) -> str | None:
+        document = self.database[self.collection_name].find_one(
+            self._filter(),
+            {"_id": 1},
+        )
+        if not document:
+            return None
+        return str(document.get("_id"))
 
     def get(self) -> MongoDocumentSnapshot:
         document = self.database[self.collection_name].find_one(self._filter())
@@ -338,19 +385,46 @@ class MongoDocumentReference:
 
     def set(self, data: dict[str, Any], merge: bool = False) -> None:
         payload = _mongo_safe(dict(data or {}))
+        collection = self.database[self.collection_name]
+
         if self.parent_id is not None:
             payload["__mongo_parent_id"] = self.parent_id
             payload["__mongo_parent_collection"] = self.parent_collection
-        collection = self.database[self.collection_name]
+            payload["__mongo_document_id"] = self.id
+
+        existing_storage_id = self._existing_storage_id()
+        storage_id = existing_storage_id or self._storage_id()
+
         if merge:
-            collection.update_one(self._filter(), {"$set": payload}, upsert=True)
+            collection.update_one(
+                {"_id": storage_id},
+                {"$set": payload},
+                upsert=True,
+            )
         else:
-            payload["_id"] = self.id
-            collection.replace_one(self._filter(), payload, upsert=True)
+            payload["_id"] = storage_id
+            collection.replace_one(
+                {"_id": storage_id},
+                payload,
+                upsert=True,
+            )
 
     def update(self, data: dict[str, Any]) -> None:
-        self.database[self.collection_name].update_one(
-            self._filter(), {"$set": _mongo_safe(dict(data or {}))}, upsert=False
+        collection = self.database[self.collection_name]
+        storage_id = self._existing_storage_id()
+        if storage_id is None:
+            return
+
+        payload = _mongo_safe(dict(data or {}))
+        if self.parent_id is not None:
+            payload["__mongo_parent_id"] = self.parent_id
+            payload["__mongo_parent_collection"] = self.parent_collection
+            payload["__mongo_document_id"] = self.id
+
+        collection.update_one(
+            {"_id": storage_id},
+            {"$set": payload},
+            upsert=False,
         )
 
     def delete(self) -> None:
