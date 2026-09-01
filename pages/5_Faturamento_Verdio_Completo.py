@@ -689,7 +689,12 @@ def create_zip_of_pdfs(df_aprovado, periodo_relatorio):
     return zip_buffer.getvalue()
 
 
-def salvar_historico_lote(df_aprovado, periodo_relatorio):
+def salvar_historico_lote(
+    df_aprovado,
+    periodo_relatorio,
+    *,
+    bulk_mode: bool = False,
+):
     success_count = 0
     failed_clients = []
     cols_to_save = [
@@ -715,7 +720,12 @@ def salvar_historico_lote(df_aprovado, periodo_relatorio):
         }
         clean = _clean_export_df(df_cliente)
         detalhes_itens = clean[[column for column in cols_to_save if column in clean.columns]].to_dict(orient="records")
-        if umdb.log_faturamento(log_data, detalhes_itens, notify=False):
+        if umdb.log_faturamento(
+            log_data,
+            detalhes_itens,
+            notify=False,
+            audit=not bulk_mode,
+        ):
             success_count += 1
         else:
             failed_clients.append(
@@ -730,16 +740,24 @@ def salvar_historico_lote(df_aprovado, periodo_relatorio):
 
     if failed_clients:
         st.session_state["lote_salvo"] = False
-        st.error(
-            f"O lote não foi fechado porque {len(failed_clients)} cliente(s) "
-            "falharam ao salvar."
+        st.session_state["_last_period_save_error"] = (
+            f"{len(failed_clients)} cliente(s) falharam ao salvar. "
+            + "; ".join(
+                f"{item['Cliente']}: {item['Erro']}"
+                for item in failed_clients[:5]
+            )
         )
-        st.dataframe(
-            pd.DataFrame(failed_clients),
-            use_container_width=True,
-            hide_index=True,
-            height=min(420, 42 + (len(failed_clients) * 35)),
-        )
+        if not bulk_mode:
+            st.error(
+                f"O lote não foi fechado porque {len(failed_clients)} cliente(s) "
+                "falharam ao salvar."
+            )
+            st.dataframe(
+                pd.DataFrame(failed_clients),
+                use_container_width=True,
+                hide_index=True,
+                height=min(420, 42 + (len(failed_clients) * 35)),
+            )
         return False
 
     closed = umdb.close_billing_month(
@@ -750,7 +768,15 @@ def salvar_historico_lote(df_aprovado, periodo_relatorio):
     )
     st.session_state["lote_salvo"] = bool(closed)
     if closed:
-        st.success(f"{success_count} clientes salvos e mês fechado para análise comercial.")
+        st.session_state.pop("_last_period_save_error", None)
+        if not bulk_mode:
+            st.success(
+                f"{success_count} clientes salvos e mês fechado para análise comercial."
+            )
+    else:
+        st.session_state["_last_period_save_error"] = (
+            "Os clientes foram processados, mas o fechamento mensal falhou."
+        )
     return bool(closed)
 
 # --- 4. INTERFACE ---
@@ -1488,81 +1514,166 @@ if uploaded_files:
         "não criam revisão duplicada."
     )
 
+    BULK_JOB_KEY = "billing_bulk_history_job"
+
     confirm_bulk = st.checkbox(
         f"Confirmo o salvamento de {len(ordered_periods)} período(s) no histórico.",
         key="confirm_bulk_history",
     )
 
+    bulk_job = st.session_state.get(BULK_JOB_KEY)
+    if isinstance(bulk_job, dict) and bulk_job.get("signature") != batch_signature:
+        st.session_state.pop(BULK_JOB_KEY, None)
+        bulk_job = None
+
+    bulk_running = bool(isinstance(bulk_job, dict) and bulk_job.get("running"))
+
     if st.button(
         "Salvar todos os períodos processados",
         type="primary",
         use_container_width=True,
-        disabled=not confirm_bulk,
+        disabled=(not confirm_bulk) or bulk_running,
         key="save_all_periods",
     ):
-        successes = []
-        failures = []
+        st.session_state[BULK_JOB_KEY] = {
+            "signature": batch_signature,
+            "periods": list(ordered_periods),
+            "next_index": 0,
+            "successes": [],
+            "failures": [],
+            "running": True,
+            "current_period": "",
+            "last_completed_period": "",
+        }
+        st.rerun()
 
-        progress = st.progress(0)
-        status = st.empty()
+    bulk_job = st.session_state.get(BULK_JOB_KEY)
 
-        for index, periodo in enumerate(ordered_periods, start=1):
-            frame = approved_by_period.get(periodo)
+    if isinstance(bulk_job, dict) and bulk_job.get("signature") == batch_signature:
+        job_periods = list(bulk_job.get("periods") or [])
+        total_job_periods = len(job_periods)
+        next_index = int(bulk_job.get("next_index") or 0)
+        successes = list(bulk_job.get("successes") or [])
+        failures = list(bulk_job.get("failures") or [])
+        running = bool(bulk_job.get("running"))
 
-            status.write(
-                f"Salvando {periodo} ({index}/{len(ordered_periods)})..."
+        completed_count = min(next_index, total_job_periods)
+        progress_value = completed_count / total_job_periods if total_job_periods else 1.0
+
+        st.markdown("#### Progresso da carga histórica")
+        st.progress(progress_value)
+
+        p1, p2, p3, p4 = st.columns(4)
+        p1.metric("Concluídos", f"{completed_count}/{total_job_periods}")
+        p2.metric("Sucessos", len(successes))
+        p3.metric("Falhas", len(failures))
+        p4.metric(
+            "Próximo",
+            job_periods[next_index]
+            if running and next_index < total_job_periods
+            else "Finalizado",
+        )
+
+        if successes:
+            st.caption("Salvos: " + ", ".join(successes))
+
+        if failures:
+            with st.expander(f"Ver {len(failures)} falha(s)", expanded=not running):
+                st.dataframe(
+                    pd.DataFrame(failures),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+
+        if running and next_index < total_job_periods:
+            periodo_atual = job_periods[next_index]
+            frame = approved_by_period.get(periodo_atual)
+
+            bulk_job["current_period"] = periodo_atual
+            st.session_state[BULK_JOB_KEY] = bulk_job
+
+            st.info(
+                f"Salvando {periodo_atual} "
+                f"({next_index + 1}/{total_job_periods}). "
+                "Ao concluir este mês, a página continuará automaticamente "
+                "no próximo período."
             )
 
             try:
                 if frame is None or frame.empty:
                     failures.append(
                         {
-                            "Período": periodo,
+                            "Período": periodo_atual,
                             "Motivo": "Nenhum registro aprovado.",
                         }
                     )
-                elif salvar_historico_lote(frame, periodo):
-                    successes.append(periodo)
+                elif salvar_historico_lote(
+                    frame,
+                    periodo_atual,
+                    bulk_mode=True,
+                ):
+                    successes.append(periodo_atual)
                 else:
                     failures.append(
                         {
-                            "Período": periodo,
-                            "Motivo": "Falha ao salvar ou fechar o mês.",
+                            "Período": periodo_atual,
+                            "Motivo": st.session_state.get(
+                                "_last_period_save_error",
+                                "Falha ao salvar ou fechar o mês.",
+                            ),
                         }
                     )
             except Exception as exc:
                 failures.append(
                     {
-                        "Período": periodo,
-                        "Motivo": str(exc),
+                        "Período": periodo_atual,
+                        "Motivo": f"{type(exc).__name__}: {exc}",
                     }
                 )
 
-            progress.progress(index / len(ordered_periods))
+            bulk_job["successes"] = successes
+            bulk_job["failures"] = failures
+            bulk_job["last_completed_period"] = periodo_atual
+            bulk_job["current_period"] = ""
+            bulk_job["next_index"] = next_index + 1
+            if bulk_job["next_index"] >= total_job_periods:
+                bulk_job["running"] = False
 
-        status.empty()
+            st.session_state[BULK_JOB_KEY] = bulk_job
+            st.rerun()
 
-        if successes:
-            st.success(
-                f"{len(successes)} período(s) salvos com sucesso: "
-                + ", ".join(successes)
-            )
+        if running and next_index >= total_job_periods:
+            bulk_job["running"] = False
+            st.session_state[BULK_JOB_KEY] = bulk_job
+            st.rerun()
 
-        if failures:
-            st.error(
-                f"{len(failures)} período(s) apresentaram falha."
-            )
-            st.dataframe(
-                pd.DataFrame(failures),
-                use_container_width=True,
-                hide_index=True,
-            )
-        else:
-            st.balloons()
-            st.success(
-                "Carga histórica concluída. Os meses já estão disponíveis "
-                "para histórico, analytics e churn."
-            )
+        if not running:
+            if successes:
+                st.success(
+                    f"{len(successes)} período(s) concluído(s): "
+                    + ", ".join(successes)
+                )
+
+            if failures:
+                st.error(
+                    f"{len(failures)} período(s) apresentaram falha. "
+                    "Os demais períodos foram mantidos e não precisam ser refeitos."
+                )
+            elif total_job_periods:
+                st.balloons()
+                st.success(
+                    "Carga histórica concluída. Todos os meses estão disponíveis "
+                    "para histórico, analytics e churn."
+                )
+
+            if st.button(
+                "Limpar status desta carga",
+                key="clear_bulk_history_job",
+                use_container_width=False,
+            ):
+                st.session_state.pop(BULK_JOB_KEY, None)
+                st.rerun()
+
 
 else:
     st.info(
