@@ -102,7 +102,12 @@ def get_last_billing_for_client(client_name: str) -> dict[str, Any] | None:
         return None
 
 
-def log_faturamento(faturamento_data: dict[str, Any], detalhes_itens: list[Any] | None = None) -> bool:
+def log_faturamento(
+    faturamento_data: dict[str, Any],
+    detalhes_itens: list[Any] | None = None,
+    *,
+    notify: bool = True,
+) -> bool:
     """Salva o snapshot vigente e preserva revisões diferentes em uma trilha imutável.
 
     Downloads repetidos do mesmo faturamento não criam novas revisões. Se os dados
@@ -140,7 +145,11 @@ def log_faturamento(faturamento_data: dict[str, Any], detalhes_itens: list[Any] 
                     f"Faturamento idêntico já estava salvo para {cliente} ({periodo}).",
                     {"cliente": cliente, "periodo": periodo, "snapshot_hash": snapshot_hash},
                 )
-                st.toast("Este faturamento já estava salvo; nenhuma revisão duplicada foi criada.", icon="✅")
+                if notify:
+                    st.toast(
+                        "Este faturamento já estava salvo; nenhuma revisão duplicada foi criada.",
+                        icon="✅",
+                    )
                 return True
 
         previous_revision = int(primary_data.get("revision", 1 if existing_docs else 0) or 0)
@@ -201,11 +210,13 @@ def log_faturamento(faturamento_data: dict[str, Any], detalhes_itens: list[Any] 
             f"Faturamento salvo para {cliente} ({periodo}) — revisão {revision}.",
             summary,
         )
-        st.toast(f"Histórico salvo — revisão {revision}.", icon="✅")
+        if notify:
+            st.toast(f"Histórico salvo — revisão {revision}.", icon="✅")
         return True
     except Exception:
         log.exception("Erro ao salvar histórico de faturamento.")
-        st.error("Não foi possível salvar o histórico de faturamento.")
+        if notify:
+            st.error("Não foi possível salvar o histórico de faturamento.")
         return False
 
 

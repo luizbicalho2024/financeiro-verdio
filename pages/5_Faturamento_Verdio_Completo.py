@@ -5,12 +5,14 @@ import io
 import zipfile
 import unicodedata
 import calendar
+import hashlib
 from datetime import datetime
 from typing import Dict, List, Tuple, Optional
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from app_core.ui import apply_branding, render_sidebar
 from app_core.spreadsheet_reader import read_raw_spreadsheet
+from app_core.inventory_import import SUPPORTED_TYPES
 
 import streamlit as st
 import pandas as pd
@@ -246,7 +248,50 @@ def _calculate_billing(df: pd.DataFrame, df_inventory: pd.DataFrame, report_date
         df_merged = df_merged.drop(columns=["Modelo_Estoque"])
 
     df_merged["Tipo"] = df_merged["Tipo"].apply(_normalize_tipo)
-    not_found = sorted([x for x in df_merged.loc[df_merged["Tipo"].eq(""), "Nº Equipamento"].dropna().unique().tolist() if str(x).strip()])
+
+    inventory_serials = set(
+        df_inventory["Nº Equipamento"].dropna().astype(str).str.strip().tolist()
+    )
+    missing_inventory_mask = ~df_merged["Nº Equipamento"].astype(str).str.strip().isin(
+        inventory_serials
+    )
+
+    model_type_source = df_inventory[["Modelo", "Tipo"]].copy()
+    model_type_source["_model_key"] = model_type_source["Modelo"].apply(_canonical_key)
+    model_type_source["Tipo"] = model_type_source["Tipo"].apply(_normalize_tipo)
+    model_type_source = model_type_source[
+        model_type_source["_model_key"].ne("")
+        & model_type_source["Tipo"].ne("")
+    ]
+
+    model_type_map = {}
+    if not model_type_source.empty:
+        grouped_types = model_type_source.groupby("_model_key")["Tipo"].agg(
+            lambda values: sorted(set(value for value in values if value))
+        )
+        model_type_map = {
+            model_key: types[0]
+            for model_key, types in grouped_types.items()
+            if len(types) == 1
+        }
+
+    missing_type_mask = df_merged["Tipo"].eq("")
+    inferred_types = df_merged["Modelo"].apply(_canonical_key).map(model_type_map).fillna("")
+    df_merged.loc[missing_type_mask, "Tipo"] = inferred_types[missing_type_mask]
+
+    not_found = sorted(
+        [
+            x
+            for x in df_merged.loc[
+                missing_inventory_mask,
+                "Nº Equipamento",
+            ]
+            .dropna()
+            .unique()
+            .tolist()
+            if str(x).strip()
+        ]
+    )
 
     normalized_prices = {_normalize_tipo(k): _safe_float(v) for k, v in (prices_by_type or {}).items()}
     df_merged["Valor Unitario"] = df_merged["Tipo"].map(normalized_prices).fillna(0.0).astype(float)
@@ -592,7 +637,7 @@ def salvar_historico_lote(df_aprovado, periodo_relatorio):
         }
         clean = _clean_export_df(df_cliente)
         detalhes_itens = clean[[column for column in cols_to_save if column in clean.columns]].to_dict(orient="records")
-        if umdb.log_faturamento(log_data, detalhes_itens):
+        if umdb.log_faturamento(log_data, detalhes_itens, notify=False):
             success_count += 1
         else:
             failed_clients.append(str(cliente))
@@ -662,6 +707,123 @@ def _safe_widget_key(value: str) -> str:
         "_",
         str(value or ""),
     ).strip("_")[:100]
+
+
+def _billing_batch_signature(files, tracker_inventory) -> str:
+    digest = hashlib.sha256()
+
+    for uploaded in files:
+        payload = uploaded.getvalue()
+        digest.update(str(uploaded.name or "").encode("utf-8", errors="ignore"))
+        digest.update(str(len(payload)).encode("ascii"))
+        digest.update(hashlib.sha256(payload).digest())
+
+    inventory_rows = sorted(
+        (
+            _normalize_equipment(item.get("Nº Equipamento", "")),
+            str(item.get("Modelo", "") or "").strip(),
+            _normalize_tipo(item.get("Tipo", "")),
+        )
+        for item in (tracker_inventory or [])
+    )
+    for serial_number, model, equipment_type in inventory_rows:
+        digest.update(
+            f"{serial_number}|{model}|{equipment_type}\n".encode(
+                "utf-8",
+                errors="ignore",
+            )
+        )
+
+    return digest.hexdigest()
+
+
+def _frame_signature(df: pd.DataFrame) -> str:
+    clean = _clean_export_df(df).copy()
+    normalized = clean.fillna("").astype(str)
+    hashes = pd.util.hash_pandas_object(normalized, index=True)
+    digest = hashlib.sha1()
+    digest.update("|".join(normalized.columns.astype(str)).encode("utf-8"))
+    digest.update(hashes.values.tobytes())
+    return digest.hexdigest()
+
+
+def _build_missing_inventory_candidates(
+    processed_periods,
+    tracker_inventory,
+) -> pd.DataFrame:
+    existing = {
+        _normalize_equipment(item.get("Nº Equipamento", ""))
+        for item in (tracker_inventory or [])
+    }
+    existing.discard("")
+
+    frames = []
+    for periodo, info in (processed_periods or {}).items():
+        frame = info.get("df")
+        if frame is None or frame.empty or "Nº Equipamento" not in frame.columns:
+            continue
+
+        candidate = frame.copy()
+        candidate["Nº Equipamento"] = candidate["Nº Equipamento"].apply(
+            _normalize_equipment
+        )
+        candidate = candidate[
+            candidate["Nº Equipamento"].ne("")
+            & ~candidate["Nº Equipamento"].isin(existing)
+        ].copy()
+
+        if candidate.empty:
+            continue
+
+        if "Modelo" not in candidate.columns:
+            candidate["Modelo"] = ""
+        if "Tipo" not in candidate.columns:
+            candidate["Tipo"] = ""
+
+        candidate["Modelo"] = (
+            candidate["Modelo"].fillna("").astype(str).str.strip()
+        )
+        candidate["Tipo"] = candidate["Tipo"].apply(_normalize_tipo)
+        candidate["Período detectado"] = periodo
+
+        frames.append(
+            candidate[
+                [
+                    "Nº Equipamento",
+                    "Modelo",
+                    "Tipo",
+                    "Período detectado",
+                ]
+            ]
+        )
+
+    if not frames:
+        return pd.DataFrame(
+            columns=[
+                "Nº Equipamento",
+                "Modelo",
+                "Tipo",
+                "Período detectado",
+            ]
+        )
+
+    combined = pd.concat(frames, ignore_index=True)
+    combined = combined.drop_duplicates(
+        subset=["Nº Equipamento"],
+        keep="last",
+    )
+    return combined.sort_values(
+        ["Modelo", "Nº Equipamento"],
+        kind="stable",
+    ).reset_index(drop=True)
+
+
+def _clear_billing_batch_cache() -> None:
+    for key in [
+        "billing_processed_batch_cache",
+        "billing_export_cache",
+    ]:
+        st.session_state.pop(key, None)
 
 
 def processar_arquivos_historicos(files, tracker_inventory):
@@ -742,12 +904,52 @@ if uploaded_files:
         )
         st.stop()
 
-    with st.spinner(
-        f"Processando {len(uploaded_files)} arquivo(s) e identificando os períodos..."
+    batch_signature = _billing_batch_signature(
+        uploaded_files,
+        tracker_inventory,
+    )
+    batch_cache = st.session_state.get("billing_processed_batch_cache")
+
+    if (
+        isinstance(batch_cache, dict)
+        and batch_cache.get("signature") == batch_signature
     ):
-        processed_periods, processing_errors = processar_arquivos_historicos(
-            uploaded_files,
-            tracker_inventory,
+        processed_periods = batch_cache.get("processed_periods", {})
+        processing_errors = batch_cache.get("processing_errors", [])
+        st.caption(
+            "Lote reaproveitado da memória da sessão — as planilhas não foram "
+            "reprocessadas neste clique."
+        )
+    else:
+        with st.spinner(
+            f"Processando {len(uploaded_files)} arquivo(s) e identificando os períodos..."
+        ):
+            processed_periods, processing_errors = processar_arquivos_historicos(
+                uploaded_files,
+                tracker_inventory,
+            )
+
+        st.session_state["billing_processed_batch_cache"] = {
+            "signature": batch_signature,
+            "processed_periods": processed_periods,
+            "processing_errors": processing_errors,
+        }
+        st.session_state.pop("billing_export_cache", None)
+
+    cache_action_col, cache_info_col = st.columns([1, 4])
+    with cache_action_col:
+        if st.button(
+            "Reprocessar lote",
+            key="force_reprocess_billing_batch",
+            use_container_width=True,
+        ):
+            _clear_billing_batch_cache()
+            processar_planilha_lote.clear()
+            st.rerun()
+    with cache_info_col:
+        st.caption(
+            "Use Reprocessar lote apenas quando preços, contratos ou estoque "
+            "forem alterados durante esta mesma carga."
         )
 
     if processing_errors:
@@ -816,6 +1018,86 @@ if uploaded_files:
         },
     )
 
+    missing_candidates = _build_missing_inventory_candidates(
+        processed_periods,
+        tracker_inventory,
+    )
+
+    if not missing_candidates.empty:
+        st.markdown("### Novos equipamentos detectados nas planilhas")
+        inferred_count = int(missing_candidates["Tipo"].ne("").sum())
+        unresolved_count = int(missing_candidates["Tipo"].eq("").sum())
+
+        st.info(
+            f"{len(missing_candidates)} equipamento(s) ainda não existem no estoque. "
+            f"{inferred_count} tiveram o tipo inferido pelo Modelo já conhecido; "
+            f"{unresolved_count} precisam de classificação manual."
+        )
+
+        missing_editor = st.data_editor(
+            missing_candidates,
+            hide_index=True,
+            use_container_width=True,
+            key=f"missing_inventory_editor_{batch_signature[:12]}",
+            column_config={
+                "Nº Equipamento": st.column_config.TextColumn(
+                    "Nº Equipamento",
+                    disabled=True,
+                ),
+                "Modelo": st.column_config.TextColumn(
+                    "Modelo",
+                    disabled=True,
+                ),
+                "Tipo": st.column_config.SelectboxColumn(
+                    "Tipo para faturamento",
+                    options=[""] + SUPPORTED_TYPES,
+                    required=False,
+                ),
+                "Período detectado": st.column_config.TextColumn(
+                    "Detectado em",
+                    disabled=True,
+                ),
+            },
+        )
+
+        unresolved_after_edit = missing_editor[
+            missing_editor["Tipo"].fillna("").astype(str).str.strip().eq("")
+        ]
+
+        if unresolved_after_edit.empty:
+            if st.button(
+                "Adicionar novos equipamentos ao estoque e recalcular",
+                type="primary",
+                key="save_missing_inventory_candidates",
+                use_container_width=True,
+            ):
+                stock_to_save = missing_editor[
+                    ["Nº Equipamento", "Modelo", "Tipo"]
+                ].copy()
+
+                with st.spinner(
+                    f"Adicionando {len(stock_to_save)} equipamento(s) ao estoque..."
+                ):
+                    count = umdb.update_tracker_inventory(
+                        stock_to_save,
+                        source_file="Descoberta automática no faturamento histórico",
+                    )
+
+                if count is not None:
+                    st.success(
+                        f"{count} equipamento(s) adicionados/atualizados no estoque. "
+                        "O lote será recalculado com os tipos e preços correspondentes."
+                    )
+                    _clear_billing_batch_cache()
+                    processar_planilha_lote.clear()
+                    st.rerun()
+        else:
+            st.warning(
+                f"Classifique o Tipo de {len(unresolved_after_edit)} equipamento(s) "
+                "antes de adicioná-los ao estoque. Não fazemos classificação automática "
+                "quando o Modelo ainda não possui referência confiável."
+            )
+
     approved_by_period = {}
 
     for periodo in ordered_periods:
@@ -839,10 +1121,24 @@ if uploaded_files:
                 )
 
             if info["not_found"]:
-                st.warning(
-                    f"{len(info['not_found'])} equipamento(s) não foram encontrados "
-                    "no estoque e ficaram com faturamento zerado."
+                unresolved_missing = int(
+                    df_period[
+                        df_period["Nº Equipamento"].isin(info["not_found"])
+                        & df_period["Tipo"].fillna("").astype(str).str.strip().eq("")
+                    ].shape[0]
                 )
+                if unresolved_missing:
+                    st.warning(
+                        f"{len(info['not_found'])} equipamento(s) estão ausentes do estoque; "
+                        f"{unresolved_missing} ainda estão sem Tipo e permanecem com faturamento "
+                        "zerado. Use a seção 'Novos equipamentos detectados nas planilhas'."
+                    )
+                else:
+                    st.info(
+                        f"{len(info['not_found'])} equipamento(s) estão ausentes do estoque, "
+                        "mas tiveram o Tipo inferido pelo Modelo e já participam do cálculo. "
+                        "Adicione-os ao estoque pela seção acima para regularizar o cadastro."
+                    )
                 with st.expander(
                     "Ver equipamentos não encontrados",
                     expanded=False,
@@ -908,41 +1204,46 @@ if uploaded_files:
                 _money_br(totals["geral"]),
             )
 
-            client_summary = []
-            for cliente, df_client in df_approved.groupby("Cliente"):
-                client_totals = build_totals(df_client)
-                client_summary.append(
-                    {
-                        "Cliente": cliente,
-                        "Cheio": client_totals["terminais_cheio"],
-                        "Proporcional": client_totals[
-                            "terminais_proporcional"
-                        ],
-                        "Suspensos": client_totals[
-                            "terminais_suspensos"
-                        ],
-                        "GPRS": client_totals["terminais_gprs"],
-                        "Satelitais": client_totals[
-                            "terminais_satelitais"
-                        ],
-                        "Valor Total": client_totals["geral"],
-                    }
-                )
+            if st.checkbox(
+                "Exibir resumo por cliente",
+                key=f"show_client_summary_{key_suffix}",
+                value=False,
+            ):
+                client_summary = []
+                for cliente, df_client in df_approved.groupby("Cliente"):
+                    client_totals = build_totals(df_client)
+                    client_summary.append(
+                        {
+                            "Cliente": cliente,
+                            "Cheio": client_totals["terminais_cheio"],
+                            "Proporcional": client_totals[
+                                "terminais_proporcional"
+                            ],
+                            "Suspensos": client_totals[
+                                "terminais_suspensos"
+                            ],
+                            "GPRS": client_totals["terminais_gprs"],
+                            "Satelitais": client_totals[
+                                "terminais_satelitais"
+                            ],
+                            "Valor Total": client_totals["geral"],
+                        }
+                    )
 
-            if client_summary:
-                st.dataframe(
-                    pd.DataFrame(client_summary).sort_values("Cliente"),
-                    use_container_width=True,
-                    hide_index=True,
-                    column_config={
-                        "Valor Total": st.column_config.NumberColumn(
-                            "Valor Total",
-                            format="R$ %.2f",
-                        ),
-                    },
-                )
+                if client_summary:
+                    st.dataframe(
+                        pd.DataFrame(client_summary).sort_values("Cliente"),
+                        use_container_width=True,
+                        hide_index=True,
+                        column_config={
+                            "Valor Total": st.column_config.NumberColumn(
+                                "Valor Total",
+                                format="R$ %.2f",
+                            ),
+                        },
+                    )
 
-            col_save, col_excel, col_pdf = st.columns(3)
+            col_save, col_prepare = st.columns(2)
 
             if col_save.button(
                 f"Salvar {periodo}",
@@ -958,26 +1259,62 @@ if uploaded_files:
                 ):
                     st.success(f"{periodo} salvo e fechado.")
 
-            col_excel.download_button(
-                "Baixar Excel",
-                generate_master_excel(df_approved),
-                f"Faturamento_Lote_{periodo.replace(' ', '_')}.xlsx",
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                key=f"excel_period_{key_suffix}",
-                use_container_width=True,
+            export_cache = st.session_state.setdefault(
+                "billing_export_cache",
+                {},
             )
+            approved_signature = _frame_signature(df_approved)
+            export_key = f"{batch_signature}:{periodo}"
+            prepared_export = export_cache.get(export_key)
 
-            col_pdf.download_button(
-                "Baixar PDFs (ZIP)",
-                create_zip_of_pdfs(
-                    df_approved,
-                    periodo,
-                ),
-                f"PDFs_{periodo.replace(' ', '_')}.zip",
-                "application/zip",
-                key=f"pdf_period_{key_suffix}",
+            if (
+                isinstance(prepared_export, dict)
+                and prepared_export.get("signature") != approved_signature
+            ):
+                export_cache.pop(export_key, None)
+                prepared_export = None
+
+            if col_prepare.button(
+                "Preparar Excel e PDFs",
+                key=f"prepare_exports_{key_suffix}",
                 use_container_width=True,
-            )
+            ):
+                with st.spinner(
+                    f"Gerando arquivos de {periodo} somente uma vez..."
+                ):
+                    prepared_export = {
+                        "signature": approved_signature,
+                        "excel": generate_master_excel(df_approved),
+                        "pdf_zip": create_zip_of_pdfs(
+                            df_approved,
+                            periodo,
+                        ),
+                    }
+                    export_cache[export_key] = prepared_export
+
+            if prepared_export:
+                download_excel, download_pdf = st.columns(2)
+                download_excel.download_button(
+                    "Baixar Excel",
+                    prepared_export["excel"],
+                    f"Faturamento_Lote_{periodo.replace(' ', '_')}.xlsx",
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key=f"excel_period_{key_suffix}",
+                    use_container_width=True,
+                )
+                download_pdf.download_button(
+                    "Baixar PDFs (ZIP)",
+                    prepared_export["pdf_zip"],
+                    f"PDFs_{periodo.replace(' ', '_')}.zip",
+                    "application/zip",
+                    key=f"pdf_period_{key_suffix}",
+                    use_container_width=True,
+                )
+            else:
+                st.caption(
+                    "Excel e PDFs não são gerados durante a navegação. "
+                    "Clique em 'Preparar Excel e PDFs' apenas quando precisar baixar."
+                )
 
     st.markdown("---")
     st.subheader("Carga histórica em massa")

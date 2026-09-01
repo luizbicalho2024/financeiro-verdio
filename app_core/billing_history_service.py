@@ -39,7 +39,7 @@ def _safe_text(value: Any) -> str:
     if value is None:
         return ""
     text = str(value).strip()
-    return "" if text.lower() in {"nan", "nat", "none"} else text
+    return "" if text.lower() in {"nan", "nat", "none", "<na>"} else text
 
 
 def _safe_float(value: Any, default: float = 0.0) -> float:
@@ -75,8 +75,15 @@ def _serialize(value: Any) -> Any:
     """Converte tipos comuns de pandas/numpy/datetime para valores aceitos pelo MongoDB e JSON."""
     if value is None:
         return None
+
+    if value.__class__.__name__ in {"NaTType", "NAType"}:
+        return None
+
     if isinstance(value, datetime):
-        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+        try:
+            return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+        except (TypeError, ValueError):
+            return None
     if isinstance(value, date):
         return datetime(value.year, value.month, value.day, tzinfo=timezone.utc)
     if isinstance(value, bool):
@@ -94,8 +101,8 @@ def _serialize(value: Any) -> Any:
     if hasattr(value, "to_pydatetime"):
         try:
             converted = value.to_pydatetime()
-            if isinstance(converted, datetime):
-                return converted if converted.tzinfo else converted.replace(tzinfo=timezone.utc)
+            if converted is not value:
+                return _serialize(converted)
         except Exception:
             pass
     if hasattr(value, "item"):
