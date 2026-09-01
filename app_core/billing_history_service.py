@@ -42,6 +42,25 @@ def _safe_text(value: Any) -> str:
     return "" if text.lower() in {"nan", "nat", "none", "<na>"} else text
 
 
+def _is_missing_value(value: Any) -> bool:
+    if value is None:
+        return True
+    if value.__class__.__name__ in {"NaTType", "NAType"}:
+        return True
+    if isinstance(value, float):
+        return math.isnan(value) or math.isinf(value)
+    text = str(value).strip().lower()
+    return text in {"", "nan", "nat", "none", "<na>"}
+
+
+def _first_present(item: dict[str, Any], *keys: str) -> Any:
+    for key in keys:
+        value = item.get(key)
+        if not _is_missing_value(value):
+            return value
+    return None
+
+
 def _safe_float(value: Any, default: float = 0.0) -> float:
     if value is None:
         return float(default)
@@ -122,18 +141,30 @@ def normalize_detail_item(item: dict[str, Any], *, cliente: str, period_key: str
         "period_key": period_key,
         "run_id": run_id,
         "terminal": _safe_text(item.get("Terminal")),
-        "equipamento": _safe_text(item.get("Nº Equipamento") or item.get("Equipamento")),
+        "equipamento": _safe_text(
+            _first_present(item, "Nº Equipamento", "Equipamento")
+        ),
         "placa": _safe_text(item.get("Placa")),
         "frota": _safe_text(item.get("Frota")),
         "modelo": _safe_text(item.get("Modelo")),
         "tipo": _safe_text(item.get("Tipo")).upper(),
-        "condicao": _safe_text(item.get("Condição") or item.get("Condicao")),
+        "condicao": _safe_text(
+            _first_present(item, "Condição", "Condicao")
+        ),
         "categoria": categoria,
-        "data_ativacao": _serialize(item.get("Data Ativação") or item.get("Data Ativacao")),
-        "data_desativacao": _serialize(item.get("Data Desativação") or item.get("Data Desativacao")),
-        "dias_ativos_mes": _safe_int(item.get("Dias Ativos Mês") or item.get("Dias Ativos Mes")),
+        "data_ativacao": _serialize(
+            _first_present(item, "Data Ativação", "Data Ativacao")
+        ),
+        "data_desativacao": _serialize(
+            _first_present(item, "Data Desativação", "Data Desativacao")
+        ),
+        "dias_ativos_mes": _safe_int(
+            _first_present(item, "Dias Ativos Mês", "Dias Ativos Mes")
+        ),
         "dias_ativos_calculado": _safe_int(item.get("Dias Ativos Calculado")),
-        "suspenso_dias_mes": _safe_int(item.get("Suspenso Dias Mes") or item.get("Suspenso Dias Mês")),
+        "suspenso_dias_mes": _safe_int(
+            _first_present(item, "Suspenso Dias Mes", "Suspenso Dias Mês")
+        ),
         "dias_a_faturar": _safe_int(item.get("Dias a Faturar")),
         "valor_unitario": round(_safe_float(item.get("Valor Unitario")), 2),
         "valor_faturado": round(_safe_float(item.get("Valor a Faturar")), 2),

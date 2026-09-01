@@ -213,11 +213,23 @@ def log_faturamento(
         if notify:
             st.toast(f"Histórico salvo — revisão {revision}.", icon="✅")
         return True
-    except Exception:
+    except Exception as exc:
         log.exception("Erro ao salvar histórico de faturamento.")
+        st.session_state["_last_billing_save_error"] = (
+            f"{type(exc).__name__}: {exc}"
+        )
         if notify:
-            st.error("Não foi possível salvar o histórico de faturamento.")
+            st.error(
+                "Não foi possível salvar o histórico de faturamento: "
+                + st.session_state["_last_billing_save_error"]
+            )
         return False
+
+
+def get_last_billing_save_error() -> str:
+    return str(
+        st.session_state.get("_last_billing_save_error", "") or ""
+    ).strip()
 
 
 def get_billing_runs(limit: int = 5000) -> list[dict[str, Any]]:
