@@ -107,6 +107,7 @@ def log_faturamento(
     detalhes_itens: list[Any] | None = None,
     *,
     notify: bool = True,
+    audit: bool = True,
 ) -> bool:
     """Salva o snapshot vigente e preserva revisões diferentes em uma trilha imutável.
 
@@ -139,12 +140,13 @@ def log_faturamento(
         if existing_docs:
             primary_data = existing_docs[0].to_dict() or {}
             if str(primary_data.get("snapshot_hash") or "") == snapshot_hash:
-                log_action(
-                    "INFO",
-                    user_email,
-                    f"Faturamento idêntico já estava salvo para {cliente} ({periodo}).",
-                    {"cliente": cliente, "periodo": periodo, "snapshot_hash": snapshot_hash},
-                )
+                if audit:
+                    log_action(
+                        "INFO",
+                        user_email,
+                        f"Faturamento idêntico já estava salvo para {cliente} ({periodo}).",
+                        {"cliente": cliente, "periodo": periodo, "snapshot_hash": snapshot_hash},
+                    )
                 if notify:
                     st.toast(
                         "Este faturamento já estava salvo; nenhuma revisão duplicada foi criada.",
@@ -193,7 +195,7 @@ def log_faturamento(
             primary.reference.set(payload)
             for duplicate in existing_docs[1:]:
                 duplicate.reference.delete()
-            if len(existing_docs) > 1:
+            if len(existing_docs) > 1 and audit:
                 log_action(
                     "WARNING",
                     user_email,
@@ -204,12 +206,13 @@ def log_faturamento(
             db.collection("billing_history").add(payload)
 
         summary = {key: value for key, value in payload.items() if key != "itens_detalhados"}
-        log_action(
-            "INFO",
-            user_email,
-            f"Faturamento salvo para {cliente} ({periodo}) — revisão {revision}.",
-            summary,
-        )
+        if audit:
+            log_action(
+                "INFO",
+                user_email,
+                f"Faturamento salvo para {cliente} ({periodo}) — revisão {revision}.",
+                summary,
+            )
         if notify:
             st.toast(f"Histórico salvo — revisão {revision}.", icon="✅")
         return True
