@@ -14,21 +14,21 @@ SUPPORTED_TYPES = ["GPRS", "SATELITE", "CAMERA", "RADIO"]
 COLUMN_ALIASES = {
     "modelo": "Modelo",
     "gateway": "Gateway",
-    "equipamento": "NÂº Equipamento",
-    "n equipamento": "NÂº Equipamento",
-    "no equipamento": "NÂº Equipamento",
-    "numero equipamento": "NÂº Equipamento",
+    "equipamento": "Nº Equipamento",
+    "n equipamento": "Nº Equipamento",
+    "no equipamento": "Nº Equipamento",
+    "numero equipamento": "Nº Equipamento",
     "p/ entrada": "P/ Entrada",
     "p entrada": "P/ Entrada",
     "para entrada": "P/ Entrada",
     "status": "Status",
     "tipo equipamento": "Tipo Equipamento Origem",
     "tipo de equipamento": "Tipo Equipamento Origem",
-    "situacao": "SituaÃ§Ã£o",
+    "situacao": "Situação",
     "tipo": "Tipo",
-    "n serie": "NÂº SÃ©rie",
-    "no serie": "NÂº SÃ©rie",
-    "numero serie": "NÂº SÃ©rie",
+    "n serie": "Nº Série",
+    "no serie": "Nº Série",
+    "numero serie": "Nº Série",
 }
 
 NULL_TEXT_VALUES = {"", "nan", "none", "nat", "<na>"}
@@ -58,7 +58,7 @@ def canonical_key(value: Any) -> str:
 
     text = str(value).strip().replace("\n", " ").replace("\r", " ")
     text = re.sub(r"\s+", " ", text)
-    text = text.replace("Âº", "o").replace("Âª", "a")
+    text = text.replace("º", "o").replace("ª", "a")
     return strip_accents(text).lower()
 
 
@@ -94,10 +94,10 @@ def _scientific_text_info(text: str) -> tuple[str, bool]:
     if normalized in {"0", "-0"}:
         integer_digits = 1
 
-    # Para identificadores, zeros finais tambÃ©m sÃ£o significativos.
-    # Se a notaÃ§Ã£o cientÃ­fica traz menos algarismos significativos do que o
-    # inteiro resultante, nÃ£o hÃ¡ como reconstruir com seguranÃ§a os dÃ­gitos
-    # perdidos pela exportaÃ§Ã£o (ex.: 8,62193E+14).
+    # Para identificadores, zeros finais também são significativos.
+    # Se a notação científica traz menos algarismos significativos do que o
+    # inteiro resultante, não há como reconstruir com segurança os dígitos
+    # perdidos pela exportação (ex.: 8,62193E+14).
     lossy = significant_digits < integer_digits
     return normalized, lossy
 
@@ -106,9 +106,9 @@ def normalize_identifier(value: Any) -> tuple[str, bool, bool]:
     """
     Retorna (identificador_normalizado, veio_de_notacao_cientifica, perdeu_precisao).
 
-    NÃºmeros inteiros vindos diretamente de Excel sÃ£o seguros enquanto estiverem
-    dentro do limite de inteiros exatos do IEEE-754 (2**53). Texto em notaÃ§Ã£o
-    cientÃ­fica Ã© tratado de forma conservadora para evitar criar IMEIs incorretos.
+    Números inteiros vindos diretamente de Excel são seguros enquanto estiverem
+    dentro do limite de inteiros exatos do IEEE-754 (2**53). Texto em notação
+    científica é tratado de forma conservadora para evitar criar IMEIs incorretos.
     """
     if value is None:
         return "", False, False
@@ -173,15 +173,38 @@ def _read_raw(file_bytes: bytes, file_name: str) -> pd.DataFrame:
                 )
             except Exception as exc:
                 last_error = exc
-        raise ValueError(f"NÃ£o foi possÃ­vel ler o CSV: {last_error}")
+        raise ValueError(f"Não foi possível ler o CSV: {last_error}")
 
     if lower_name.endswith(".xls"):
-        return pd.read_excel(
-            io.BytesIO(file_bytes),
-            header=None,
-            engine="xlrd",
-            dtype=object,
-        )
+        try:
+            import xlrd
+
+            workbook = xlrd.open_workbook(
+                file_contents=file_bytes,
+                ignore_workbook_corruption=True,
+                logfile=io.StringIO(),
+            )
+
+            if workbook.nsheets < 1:
+                raise ValueError(
+                    "O arquivo XLS não possui nenhuma planilha legível."
+                )
+
+            sheet = workbook.sheet_by_index(0)
+            rows = [
+                sheet.row_values(row_index)
+                for row_index in range(sheet.nrows)
+            ]
+
+            return pd.DataFrame(rows, dtype=object)
+
+        except Exception as exc:
+            raise ValueError(
+                "Não foi possível recuperar o arquivo XLS. "
+                "A estrutura interna do arquivo está corrompida ou "
+                "incompatível com o leitor de Excel legado. "
+                f"Detalhe técnico: {type(exc).__name__}: {exc}"
+            ) from exc
 
     return pd.read_excel(
         io.BytesIO(file_bytes),
@@ -245,16 +268,16 @@ def _resolve_inventory_identifier(
     serial, serial_scientific, serial_lossy = normalize_identifier(serial_value)
 
     if equipment and not equipment_lossy:
-        return equipment, equipment_scientific, False, "NÂº Equipamento"
+        return equipment, equipment_scientific, False, "Nº Equipamento"
 
     if serial and not serial_lossy:
-        return serial, serial_scientific, False, "NÂº SÃ©rie"
+        return serial, serial_scientific, False, "Nº Série"
 
     if equipment:
-        return equipment, equipment_scientific, equipment_lossy, "NÂº Equipamento"
+        return equipment, equipment_scientific, equipment_lossy, "Nº Equipamento"
 
     if serial:
-        return serial, serial_scientific, serial_lossy, "NÂº SÃ©rie"
+        return serial, serial_scientific, serial_lossy, "Nº Série"
 
     return "", False, False, ""
 
@@ -268,7 +291,7 @@ def parse_inventory_report(
 
     if header_row is None:
         raise ValueError(
-            "NÃ£o foi possÃ­vel encontrar o cabeÃ§alho do estoque. "
+            "Não foi possível encontrar o cabeçalho do estoque. "
             "O arquivo deve conter pelo menos as colunas Modelo e Equipamento."
         )
 
@@ -279,28 +302,28 @@ def parse_inventory_report(
     ]
     frame = normalize_columns(frame)
 
-    required = ["NÂº Equipamento", "Modelo"]
+    required = ["Nº Equipamento", "Modelo"]
     missing = [column for column in required if column not in frame.columns]
     if missing:
         raise ValueError(
-            "Colunas obrigatÃ³rias ausentes: " + ", ".join(missing)
+            "Colunas obrigatórias ausentes: " + ", ".join(missing)
         )
 
     serial_column = (
-        frame["NÂº SÃ©rie"]
-        if "NÂº SÃ©rie" in frame.columns
+        frame["Nº Série"]
+        if "Nº Série" in frame.columns
         else pd.Series([""] * len(frame), index=frame.index, dtype=object)
     )
 
     original_equipment_values = [
         "" if pd.isna(value) else str(value).strip()
-        for value in frame["NÂº Equipamento"].tolist()
+        for value in frame["Nº Equipamento"].tolist()
     ]
 
     resolved = [
         _resolve_inventory_identifier(equipment, serial)
         for equipment, serial in zip(
-            frame["NÂº Equipamento"].tolist(),
+            frame["Nº Equipamento"].tolist(),
             serial_column.tolist(),
         )
     ]
@@ -311,20 +334,20 @@ def parse_inventory_report(
     frame["_ID_Impreciso"] = [bool(item[2]) for item in resolved]
     frame["_ID_Origem"] = [item[3] for item in resolved]
 
-    frame["NÂº Equipamento"] = frame["_ID_Resolvido"]
+    frame["Nº Equipamento"] = frame["_ID_Resolvido"]
     frame["Modelo"] = frame["Modelo"].fillna("").astype(str).str.strip()
 
-    if "NÂº SÃ©rie" in frame.columns:
-        frame["NÂº SÃ©rie"] = frame["NÂº SÃ©rie"].apply(normalize_equipment)
+    if "Nº Série" in frame.columns:
+        frame["Nº Série"] = frame["Nº Série"].apply(normalize_equipment)
 
     frame = frame[
-        (frame["NÂº Equipamento"] != "")
+        (frame["Nº Equipamento"] != "")
         & (frame["Modelo"] != "")
         & (frame["Modelo"].str.lower() != "modelo")
     ].copy()
 
     if frame.empty:
-        raise ValueError("Nenhum rastreador vÃ¡lido foi encontrado na planilha.")
+        raise ValueError("Nenhum rastreador válido foi encontrado na planilha.")
 
     lossy_rows = frame[frame["_ID_Impreciso"]].copy()
     if not lossy_rows.empty:
@@ -339,23 +362,23 @@ def parse_inventory_report(
 
         raise ValueError(
             f"Foram encontrados {len(lossy_rows)} equipamento(s) com identificador "
-            "abreviado/sem precisÃ£o suficiente, normalmente causado por exportaÃ§Ã£o "
-            "em notaÃ§Ã£o cientÃ­fica (ex.: 8,62193E+14). Esses dÃ­gitos jÃ¡ foram "
-            "perdidos no arquivo e nÃ£o podem ser reconstruÃ­dos com seguranÃ§a. "
+            "abreviado/sem precisão suficiente, normalmente causado por exportação "
+            "em notação científica (ex.: 8,62193E+14). Esses dígitos já foram "
+            "perdidos no arquivo e não podem ser reconstruídos com segurança. "
             "Use o XLS/XLSX original do sistema, sem converter os IMEIs para "
-            "notaÃ§Ã£o cientÃ­fica, ou exporte essas colunas como texto. "
+            "notação científica, ou exporte essas colunas como texto. "
             f"Exemplos detectados: {examples_text}"
         )
 
     preferred = [
-        "NÂº Equipamento",
-        "NÂº SÃ©rie",
+        "Nº Equipamento",
+        "Nº Série",
         "Modelo",
         "Gateway",
         "P/ Entrada",
         "Status",
         "Tipo Equipamento Origem",
-        "SituaÃ§Ã£o",
+        "Situação",
         "Tipo",
     ]
     columns = [
@@ -366,7 +389,7 @@ def parse_inventory_report(
     frame = frame[columns].copy()
 
     for column in frame.columns:
-        if column in {"NÂº Equipamento", "NÂº SÃ©rie"}:
+        if column in {"Nº Equipamento", "Nº Série"}:
             continue
         frame[column] = frame[column].apply(
             lambda value: ""
@@ -376,15 +399,15 @@ def parse_inventory_report(
 
     before_dedup = len(frame)
     duplicate_mask = frame.duplicated(
-        subset=["NÂº Equipamento"],
+        subset=["Nº Equipamento"],
         keep=False,
     )
     duplicate_identifiers = sorted(
-        frame.loc[duplicate_mask, "NÂº Equipamento"].astype(str).unique().tolist()
+        frame.loc[duplicate_mask, "Nº Equipamento"].astype(str).unique().tolist()
     )
 
     frame = frame.drop_duplicates(
-        subset=["NÂº Equipamento"],
+        subset=["Nº Equipamento"],
         keep="last",
     ).reset_index(drop=True)
 
@@ -492,7 +515,7 @@ def build_model_type_mapping(
         elif source_type:
             origin = "Planilha"
         elif inferred_type:
-            origin = "SugestÃ£o por modelo"
+            origin = "Sugestão por modelo"
         else:
             origin = "Revisar"
 
@@ -502,7 +525,7 @@ def build_model_type_mapping(
                 "Qtd Equipamentos": int(len(model_rows)),
                 "Tipo origem": source_label,
                 "Tipo": suggested,
-                "Origem da sugestÃ£o": origin,
+                "Origem da sugestão": origin,
             }
         )
 
