@@ -490,24 +490,63 @@ def update_type_for_models(updates: dict[str, str]) -> tuple[int, list[str]]:
     return success_count, failed_models
 
 
-@st.cache_data(ttl=900, show_spinner=False)
+@st.cache_data(ttl=300, show_spinner=False)
 def get_pricing_config() -> dict[str, Any]:
-    defaults = {"GPRS": 59.90, "SATELITE": 159.90, "CAMERA": 0.0, "RADIO": 0.0}
+    """Compatibilidade para páginas antigas usando a fonte oficial do Simulador."""
+    try:
+        from app_core.simulator_pricing import (
+            get_simulator_db_name,
+            get_simulator_pricing,
+            legacy_equipment_pricing,
+        )
+
+        synchronized = legacy_equipment_pricing(get_simulator_pricing())
+        if synchronized:
+            return {
+                "TIPO_EQUIPAMENTO": synchronized,
+                "_source": (
+                    f"{get_simulator_db_name()}.pricing_config/global_prices"
+                ),
+            }
+    except Exception:
+        log.exception(
+            "Não foi possível sincronizar os preços com o Simulador; "
+            "usando a tabela legada do Financeiro."
+        )
+
+    defaults = {
+        "GPRS": 59.90,
+        "SATELITE": 159.90,
+        "CAMERA": 0.0,
+        "RADIO": 0.0,
+        "CAN": 0.0,
+        "RFID": 0.0,
+    }
     try:
         document = db.collection("settings").document("pricing").get()
         data = document.to_dict() if document.exists else {}
     except Exception:
-        log.exception("Erro ao buscar configurações de preço.")
+        log.exception("Erro ao buscar configurações de preço legadas.")
         data = {}
 
-    equipment_types = data.get("TIPO_EQUIPAMENTO", {}) if isinstance(data, dict) else {}
-    equipment_types = equipment_types if isinstance(equipment_types, dict) else {}
+    equipment_types = (
+        data.get("TIPO_EQUIPAMENTO", {})
+        if isinstance(data, dict)
+        else {}
+    )
+    equipment_types = (
+        equipment_types if isinstance(equipment_types, dict) else {}
+    )
     normalized_types: dict[str, dict[str, float]] = {}
 
     for key in set(equipment_types.keys()) | set(defaults.keys()):
         value = equipment_types.get(key, defaults.get(key, 0.0))
         if isinstance(value, (int, float)):
-            normalized_types[key] = {"price1": float(value), "price2": float(value), "price3": float(value)}
+            normalized_types[key] = {
+                "price1": float(value),
+                "price2": float(value),
+                "price3": float(value),
+            }
         elif isinstance(value, dict):
             normalized_types[key] = {
                 "price1": float(value.get("price1", 0.0) or 0.0),
@@ -515,10 +554,16 @@ def get_pricing_config() -> dict[str, Any]:
                 "price3": float(value.get("price3", 0.0) or 0.0),
             }
         else:
-            normalized_types[key] = {"price1": 0.0, "price2": 0.0, "price3": 0.0}
+            normalized_types[key] = {
+                "price1": 0.0,
+                "price2": 0.0,
+                "price3": 0.0,
+            }
 
-    return {"TIPO_EQUIPAMENTO": normalized_types}
-
+    return {
+        "TIPO_EQUIPAMENTO": normalized_types,
+        "_source": "financeiro_verdio.settings/pricing (fallback)",
+    }
 
 def update_pricing_config(new_prices: dict[str, Any]) -> bool:
     try:

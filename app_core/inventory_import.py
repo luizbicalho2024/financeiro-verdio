@@ -9,7 +9,7 @@ from typing import Any
 
 import pandas as pd
 
-SUPPORTED_TYPES = ["GPRS", "SATELITE", "CAMERA", "RADIO"]
+SUPPORTED_TYPES = ["GPRS", "SATELITE", "CAMERA", "RADIO", "CAN", "RFID"]
 
 COLUMN_ALIASES = {
     "modelo": "Modelo",
