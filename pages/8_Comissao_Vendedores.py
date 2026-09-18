@@ -1,20 +1,26 @@
 from __future__ import annotations
 
+import html
 import io
+import json
 import os
 import sys
 import unicodedata
 from datetime import date, datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from app_core.simulator_pricing import (
     CONTRACT_MARGIN_FLOOR_PERCENT,
     calculate_contract_margin,
+    commission_cycle_state,
+    commission_period_state,
     contract_product_values,
     eligible_billing_periods,
     get_simulator_pricing,
@@ -46,6 +52,189 @@ MODE_LABELS = {
     "fixed": "Valor fixo por mês faturado",
 }
 LABEL_TO_MODE = {v:k for k,v in MODE_LABELS.items()}
+
+
+LOCAL_TZ = ZoneInfo("America/Porto_Velho")
+
+
+def _brl(value: float) -> str:
+    text = f"{float(value or 0):,.2f}"
+    text = text.replace(",", "X").replace(".", ",").replace("X", ".")
+    return f"R$ {text}"
+
+
+def render_kpis(cards: list[dict[str, str]]) -> None:
+    body = []
+    for card in cards:
+        body.append(
+            f"""
+            <div class="kpi" style="--accent:{html.escape(card['accent'])}">
+              <div class="kpi-label">{html.escape(card['label'])}</div>
+              <div class="kpi-value">{html.escape(card['value'])}</div>
+              <div class="kpi-detail">{html.escape(card['detail'])}</div>
+            </div>
+            """
+        )
+
+    st.markdown(
+        """
+        <style>
+        .kpi-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));
+        gap:14px;margin:8px 0 22px}
+        .kpi{position:relative;background:linear-gradient(145deg,#fff,#f8fafc);
+        border:1px solid #e2e8f0;border-radius:16px;padding:18px;min-height:126px;
+        box-shadow:0 7px 22px rgba(15,23,42,.07);overflow:hidden}
+        .kpi:before{content:"";position:absolute;left:0;top:0;width:100%;height:4px;
+        background:var(--accent)}
+        .kpi-label{font-size:.76rem;font-weight:700;color:#64748b;
+        text-transform:uppercase;letter-spacing:.05em;margin-bottom:10px}
+        .kpi-value{font-size:1.5rem;font-weight:800;color:#0f172a;white-space:nowrap}
+        .kpi-detail{font-size:.75rem;color:#64748b;margin-top:10px;line-height:1.3}
+        @media(max-width:1100px){.kpi-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+        </style>
+        <div class="kpi-grid">
+        """ + "".join(body) + "</div>",
+        unsafe_allow_html=True,
+    )
+
+
+def _js(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=False).replace("</", "<\\/")
+
+
+def render_charts(
+    monthly: list[dict[str, Any]],
+    cycles: list[dict[str, Any]],
+    sellers: list[dict[str, Any]],
+) -> None:
+    source = f"""
+    <!doctype html>
+    <html>
+    <head>
+      <meta charset="utf-8">
+      <script src="https://cdn.amcharts.com/lib/5/index.js"></script>
+      <script src="https://cdn.amcharts.com/lib/5/xy.js"></script>
+      <script src="https://cdn.amcharts.com/lib/5/percent.js"></script>
+      <script src="https://cdn.amcharts.com/lib/5/themes/Animated.js"></script>
+      <style>
+        *{{box-sizing:border-box}} body{{margin:0;font-family:Inter,Segoe UI,Arial,sans-serif}}
+        .grid{{display:grid;grid-template-columns:1.4fr 1fr;gap:14px}}
+        .card{{background:#fff;border:1px solid #e2e8f0;border-radius:16px;
+        box-shadow:0 7px 22px rgba(15,23,42,.06);padding:14px;overflow:hidden}}
+        .wide{{grid-column:1/-1}}
+        .title{{font-size:15px;font-weight:800;color:#0f172a;margin:0 0 3px 4px}}
+        .sub{{font-size:11px;color:#64748b;margin:0 0 8px 4px}}
+        #monthly,#cycles{{height:320px;width:100%}} #sellers{{height:340px;width:100%}}
+      </style>
+    </head>
+    <body>
+      <div class="grid">
+        <div class="card"><div class="title">Evolução mensal</div>
+        <div class="sub">Faturamento M1–M3 x premiação apurada</div><div id="monthly"></div></div>
+        <div class="card"><div class="title">Situação dos ciclos</div>
+        <div class="sub">Status atual das janelas M1–M3</div><div id="cycles"></div></div>
+        <div class="card wide"><div class="title">Premiação por vendedor</div>
+        <div class="sub">Total apurado nos filtros atuais</div><div id="sellers"></div></div>
+      </div>
+      <script>
+      const monthlyData={_js(monthly)};
+      const cycleData={_js(cycles)};
+      const sellerData={_js(sellers)};
+
+      am5.ready(function(){{
+        function theme(root){{root.setThemes([am5themes_Animated.new(root)]);}}
+
+        if(monthlyData.length){{
+          const root=am5.Root.new("monthly"); theme(root);
+          const chart=root.container.children.push(am5xy.XYChart.new(root,{{
+            panX:false,panY:false,wheelX:"none",wheelY:"none"
+          }}));
+          const xr=am5xy.AxisRendererX.new(root,{{minGridDistance:45}});
+          xr.labels.template.setAll({{rotation:-35,centerX:am5.p100,centerY:am5.p50,fontSize:11}});
+          const xa=chart.xAxes.push(am5xy.CategoryAxis.new(root,{{
+            categoryField:"period",renderer:xr
+          }})); xa.data.setAll(monthlyData);
+          const ya=chart.yAxes.push(am5xy.ValueAxis.new(root,{{
+            renderer:am5xy.AxisRendererY.new(root,{{}})
+          }}));
+          const yb=chart.yAxes.push(am5xy.ValueAxis.new(root,{{
+            renderer:am5xy.AxisRendererY.new(root,{{opposite:true}})
+          }}));
+          const cols=chart.series.push(am5xy.ColumnSeries.new(root,{{
+            name:"Premiação",xAxis:xa,yAxis:ya,categoryXField:"period",
+            valueYField:"reward",tooltip:am5.Tooltip.new(root,{{
+              labelText:"Premiação: R$ {{valueY.formatNumber('#,###.00')}}"
+            }})
+          }}));
+          cols.columns.template.setAll({{cornerRadiusTL:5,cornerRadiusTR:5,maxWidth:34}});
+          cols.data.setAll(monthlyData);
+          const line=chart.series.push(am5xy.LineSeries.new(root,{{
+            name:"Faturamento",xAxis:xa,yAxis:yb,categoryXField:"period",
+            valueYField:"billing",strokeWidth:3,tooltip:am5.Tooltip.new(root,{{
+              labelText:"Faturamento: R$ {{valueY.formatNumber('#,###.00')}}"
+            }})
+          }}));
+          line.strokes.template.setAll({{strokeWidth:3}});
+          line.data.setAll(monthlyData);
+          chart.set("cursor",am5xy.XYCursor.new(root,{{behavior:"none"}}));
+          cols.appear(700); line.appear(700); chart.appear(700,80);
+        }}
+
+        if(cycleData.length){{
+          const root=am5.Root.new("cycles"); theme(root);
+          const chart=root.container.children.push(am5percent.PieChart.new(root,{{
+            innerRadius:am5.percent(60),layout:root.verticalLayout
+          }}));
+          const series=chart.series.push(am5percent.PieSeries.new(root,{{
+            valueField:"value",categoryField:"category",alignLabels:false
+          }}));
+          series.labels.template.setAll({{text:"{{value}}",fontSize:12,fontWeight:"600"}});
+          series.ticks.template.set("visible",false);
+          series.slices.template.setAll({{
+            stroke:am5.color(0xffffff),strokeWidth:2,
+            tooltipText:"{{category}}: {{value}}"
+          }});
+          series.data.setAll(cycleData);
+          const legend=chart.children.push(am5.Legend.new(root,{{
+            centerX:am5.p50,x:am5.p50,marginTop:8
+          }}));
+          legend.labels.template.setAll({{fontSize:11}});
+          legend.data.setAll(series.dataItems);
+          series.appear(700,80);
+        }}
+
+        if(sellerData.length){{
+          const root=am5.Root.new("sellers"); theme(root);
+          const chart=root.container.children.push(am5xy.XYChart.new(root,{{
+            panX:false,panY:false,wheelX:"none",wheelY:"none"
+          }}));
+          const yr=am5xy.AxisRendererY.new(root,{{inversed:true,minGridDistance:24}});
+          yr.labels.template.setAll({{fontSize:11,maxWidth:220,oversizedBehavior:"truncate"}});
+          const ya=chart.yAxes.push(am5xy.CategoryAxis.new(root,{{
+            categoryField:"seller",renderer:yr
+          }})); ya.data.setAll(sellerData);
+          const xa=chart.xAxes.push(am5xy.ValueAxis.new(root,{{
+            min:0,renderer:am5xy.AxisRendererX.new(root,{{}})
+          }}));
+          const series=chart.series.push(am5xy.ColumnSeries.new(root,{{
+            xAxis:xa,yAxis:ya,categoryYField:"seller",valueXField:"value",
+            tooltip:am5.Tooltip.new(root,{{
+              labelText:"{{categoryY}}: R$ {{valueX.formatNumber('#,###.00')}}"
+            }})
+          }}));
+          series.columns.template.setAll({{
+            height:am5.percent(64),cornerRadiusTR:6,cornerRadiusBR:6
+          }});
+          series.data.setAll(sellerData);
+          series.appear(700); chart.appear(700,80);
+        }}
+      }});
+      </script>
+    </body>
+    </html>
+    """
+    components.html(source,height=740,scrolling=False)
+
 
 
 def get_contracts() -> dict[str, dict]:
@@ -228,11 +417,23 @@ def invoice_reward(record: dict[str, Any], mode: str, rate: float, fixed: float,
 def style_rows(frame: pd.DataFrame, status_col: str):
     def paint(row: pd.Series) -> list[str]:
         status = str(row.get(status_col, "") or "").upper()
-        if "PENDÊNCIA" in status or "NÃO ELEGÍVEL" in status or "SEM FATURAMENTO" in status:
+        if (
+            "PENDÊNCIA" in status
+            or "NÃO ELEGÍVEL" in status
+            or "SEM FATURAMENTO" in status
+            or "SEM COMISSÃO" in status
+            or "SEM PREMIAÇÃO" in status
+        ):
             css = "background-color: #f8d7da; color: #842029;"
-        elif "ELEGÍVEL" in status or status.startswith("ENCERRADA ("):
+        elif "ELEGÍVEL ATUAL" in status:
             css = "background-color: #d1e7dd; color: #0f5132;"
-        elif "AGUARDANDO" in status or "EM ANDAMENTO" in status:
+        elif (
+            status == "APURADA"
+            or "ENCERRADA / APURADA" in status
+            or status.startswith("ENCERRADA (")
+        ):
+            css = "background-color: #e2e8f0; color: #334155;"
+        elif "AGUARDANDO" in status or "EM ANDAMENTO" in status or "PROGRAMADA" in status:
             css = "background-color: #fff3cd; color: #664d03;"
         else:
             css = ""
@@ -286,7 +487,7 @@ for record in history:
         history_index.setdefault((key, period), record)
 
 contract_rows, invoice_rows, client_rows, missing_seller = [], [], [], []
-today_period = datetime.now().strftime("%Y-%m")
+today_period = datetime.now(LOCAL_TZ).strftime("%Y-%m")
 mode = str(settings.get("invoice_reward_mode", "tiered") or "tiered")
 rate = float(settings.get("invoice_reward_percent", 2.0) or 0.0)
 fixed = float(settings.get("invoice_reward_fixed", 0.0) or 0.0)
@@ -332,9 +533,36 @@ for doc_id, contract in contracts.items():
     elif margin < CONTRACT_MARGIN_FLOOR_PERCENT: reason = f"Margem abaixo de {CONTRACT_MARGIN_FLOOR_PERCENT:.0f}%"
     else: reason = "Margem mínima atendida"
     contract_status = "ELEGÍVEL" if eligible_contract else "NÃO ELEGÍVEL"
-    contract_rows.append({"Vendedor":seller,"Cliente":client,"Data contrato":_date_label(contract_date),"Competência":contract_period,"Ano":cy,"Mês nº":cm,"Plano":plan,"Quantidade contratada":qty,"Margem contrato (%)":margin,"Status comissão":contract_status,"Motivo":reason,"Premiação contrato (R$)":contract_award})
+    if contract_period > today_period:
+        contract_current = "PROGRAMADA"
+    elif contract_period == today_period:
+        contract_current = "ELEGÍVEL ATUAL" if eligible_contract else "NÃO ELEGÍVEL"
+    else:
+        contract_current = (
+            "ENCERRADA / APURADA"
+            if eligible_contract
+            else "ENCERRADA SEM PREMIAÇÃO"
+        )
+
+    contract_rows.append({
+        "Vendedor":seller,
+        "Cliente":client,
+        "Data contrato":_date_label(contract_date),
+        "Competência":contract_period,
+        "Ano":cy,
+        "Mês nº":cm,
+        "Plano":plan,
+        "Quantidade contratada":qty,
+        "Margem contrato (%)":margin,
+        "Elegibilidade histórica":contract_status,
+        "Gerou premiação?":"SIM" if contract_award > 0 else "NÃO",
+        "Status atual":contract_current,
+        "Motivo":reason,
+        "Premiação contrato (R$)":contract_award,
+    })
 
     invoice_total, billed_months = 0.0, 0
+    cycle_end = periods[-1]
     for idx, period in enumerate(periods, start=1):
         record = history_index.get((_norm(client), period))
         py, pm = _period_parts(period)
@@ -343,30 +571,79 @@ for doc_id, contract in contracts.items():
         if record and billed > 0:
             billed_months += 1
             reward, effective, rule = invoice_reward(record, mode, rate, fixed, contract, pricing, plan, product_prices)
-        if period > today_period and not record:
-            status, reason = "AGUARDANDO", "Competência futura"
-        elif period == today_period and not record:
-            status, reason = "AGUARDANDO FATURAMENTO", "Competência atual ainda sem faturamento"
-        elif not record:
-            status, reason = "SEM FATURAMENTO", "Não existe faturamento nesta competência elegível"
-        elif billed <= 0:
-            status, reason = "NÃO ELEGÍVEL", "Faturamento zerado"
-        elif mode == "tiered" and reward <= 0:
-            status, reason = "NÃO ELEGÍVEL", "Faixa de preço não gera comissão"
-        elif mode == "percentage" and rate <= 0:
-            status, reason = "NÃO ELEGÍVEL", "Taxa configurada em 0%"
-        elif mode == "fixed" and fixed <= 0:
-            status, reason = "NÃO ELEGÍVEL", "Valor fixo configurado em R$ 0,00"
-        else:
-            status, reason = "ELEGÍVEL", "Faturamento dentro da janela M1-M3"
-        invoice_total += reward
-        invoice_rows.append({"Vendedor":seller,"Cliente":client,"Data contrato":_date_label(contract_date),"Fatura":f"M{idx}","Competência":period,"Ano":py,"Mês nº":pm,"Mês":MONTHS.get(pm, str(pm or "")),"Status comissão":status,"Motivo":reason,"Valor faturado (R$)":billed,"Regra aplicada":rule,"Taxa efetiva (%)":effective,"Premiação fatura (R$)":reward})
+        status = commission_period_state(
+            period=period,
+            cycle_end=cycle_end,
+            current_period=today_period,
+            has_billing=record is not None,
+            billed_value=billed,
+            reward_value=reward,
+        )
 
-    if billed_months >= 3: cycle = "ENCERRADA (3/3)"
-    elif today_period < periods[0]: cycle = "AGUARDANDO INÍCIO"
-    elif today_period > periods[-1]: cycle = "ENCERRADA COM PENDÊNCIA"
-    else: cycle = "EM ANDAMENTO"
-    client_rows.append({"Vendedor":seller,"Cliente":client,"Data contrato":_date_label(contract_date),"M1":periods[0],"M2":periods[1],"M3":periods[2],"Status ciclo":cycle,"Meses faturados":billed_months,"Elegibilidade contrato":contract_status,"Premiação contrato (R$)":contract_award,"Premiação faturas M1-M3 (R$)":invoice_total,"Total premiação (R$)":contract_award+invoice_total})
+        if status == "ENCERRADA / APURADA":
+            reason = (
+                "Comissão histórica apurada dentro da janela M1-M3; "
+                f"ciclo encerrado em {cycle_end}"
+            )
+        elif status == "APURADA":
+            reason = "Competência anterior já apurada dentro do ciclo ativo"
+        elif status == "ELEGÍVEL ATUAL":
+            reason = "Competência atual faturada e com premiação calculada"
+        elif status == "ENCERRADA SEM FATURAMENTO":
+            reason = "A janela M1-M3 encerrou sem faturamento nesta competência"
+        elif not record:
+            reason = "Competência futura" if period > today_period else "Sem faturamento"
+        elif billed <= 0:
+            reason = "Faturamento zerado"
+        elif mode == "tiered" and reward <= 0:
+            reason = "Faixa de preço não gera comissão"
+        elif mode == "percentage" and rate <= 0:
+            reason = "Taxa configurada em 0%"
+        elif mode == "fixed" and fixed <= 0:
+            reason = "Valor fixo configurado em R$ 0,00"
+        else:
+            reason = "Faturamento dentro da janela M1-M3"
+
+        invoice_total += reward
+        invoice_rows.append({
+            "Vendedor":seller,
+            "Cliente":client,
+            "Data contrato":_date_label(contract_date),
+            "Fatura":f"M{idx}",
+            "Competência":period,
+            "Fim da janela":cycle_end,
+            "Ano":py,
+            "Mês nº":pm,
+            "Mês":MONTHS.get(pm, str(pm or "")),
+            "Gerou comissão?":"SIM" if reward > 0 else "NÃO",
+            "Status atual":status,
+            "Motivo":reason,
+            "Valor faturado (R$)":billed,
+            "Regra aplicada":rule,
+            "Taxa efetiva (%)":effective,
+            "Premiação fatura (R$)":reward,
+        })
+
+    billed_periods = [
+        p for p, rec in zip(periods, records)
+        if rec is not None and billed_total(rec) > 0
+    ]
+    cycle = commission_cycle_state(periods, billed_periods, today_period)
+    client_rows.append({
+        "Vendedor":seller,
+        "Cliente":client,
+        "Data contrato":_date_label(contract_date),
+        "M1":periods[0],
+        "M2":periods[1],
+        "M3":periods[2],
+        "Fim da janela":periods[-1],
+        "Status ciclo":cycle,
+        "Meses faturados":billed_months,
+        "Elegibilidade contrato":contract_status,
+        "Premiação contrato (R$)":contract_award,
+        "Premiação faturas M1-M3 (R$)":invoice_total,
+        "Total premiação (R$)":contract_award+invoice_total,
+    })
 
 if missing_seller:
     st.warning(f"{len(missing_seller)} contrato(s) estão sem vendedor e ficaram fora da apuração: " + ", ".join(sorted(missing_seller)[:15]) + ("..." if len(missing_seller)>15 else ""))
@@ -385,11 +662,22 @@ sel_seller = a.selectbox("Vendedor", ["Todos"] + sorted(df_clients["Vendedor"].u
 sel_client = b.selectbox("Cliente", ["Todos"] + sorted(df_clients["Cliente"].unique().tolist()))
 sel_cycle = c.selectbox("Status do ciclo M1-M3", ["Todos"] + sorted(df_clients["Status ciclo"].unique().tolist()))
 all_years = sorted({int(x) for x in pd.concat([df_contracts["Ano"],df_invoices["Ano"]], ignore_index=True).dropna()}, reverse=True)
-d,e,f = st.columns(3)
+d,e,f,g = st.columns(4)
 sel_year = d.selectbox("Ano da comissão", ["Todos"] + all_years)
-sel_month_label = e.selectbox("Mês da comissão", ["Todos"] + [f"{n:02d} - {name}" for n,name in MONTHS.items()])
+sel_month_label = e.selectbox(
+    "Mês da comissão",
+    ["Todos"] + [f"{n:02d} - {name}" for n,name in MONTHS.items()],
+)
 sel_month = None if sel_month_label == "Todos" else int(sel_month_label[:2])
-sel_contract_status = f.selectbox("Elegibilidade do contrato", ["Todos","ELEGÍVEL","NÃO ELEGÍVEL"])
+sel_contract_status = f.selectbox(
+    "Elegibilidade histórica do contrato",
+    ["Todos","ELEGÍVEL","NÃO ELEGÍVEL"],
+)
+status_options = (
+    ["Todos"] + sorted(df_invoices["Status atual"].dropna().unique().tolist())
+    if not df_invoices.empty else ["Todos"]
+)
+sel_invoice_status = g.selectbox("Status atual da competência", status_options)
 
 mask = pd.Series(True, index=df_clients.index)
 if sel_seller != "Todos": mask &= df_clients["Vendedor"].eq(sel_seller)
@@ -408,9 +696,19 @@ def filter_frame(frame: pd.DataFrame) -> pd.DataFrame:
 
 filtered_contracts = filter_frame(df_contracts)
 filtered_invoices = filter_frame(df_invoices)
-if sel_year != "Todos" or sel_month is not None:
-    visible_pairs = set(zip(filtered_contracts["Vendedor"], filtered_contracts["Cliente"])) | set(zip(filtered_invoices["Vendedor"], filtered_invoices["Cliente"]))
-    filtered_clients = base_clients[[(v,c) in visible_pairs for v,c in zip(base_clients["Vendedor"],base_clients["Cliente"])]].copy()
+if sel_invoice_status != "Todos" and not filtered_invoices.empty:
+    filtered_invoices = filtered_invoices[
+        filtered_invoices["Status atual"].eq(sel_invoice_status)
+    ].copy()
+
+if sel_year != "Todos" or sel_month is not None or sel_invoice_status != "Todos":
+    visible_pairs = (
+        set(zip(filtered_contracts["Vendedor"], filtered_contracts["Cliente"]))
+        | set(zip(filtered_invoices["Vendedor"], filtered_invoices["Cliente"]))
+    )
+    filtered_clients = base_clients[
+        [(v,c) in visible_pairs for v,c in zip(base_clients["Vendedor"],base_clients["Cliente"])]
+    ].copy()
 else:
     filtered_clients = base_clients.copy()
 
@@ -424,32 +722,91 @@ if not filtered_clients.empty:
 
 total_contract = float(filtered_contracts["Premiação contrato (R$)"].sum()) if not filtered_contracts.empty else 0.0
 total_invoices = float(filtered_invoices["Premiação fatura (R$)"].sum()) if not filtered_invoices.empty else 0.0
-m1,m2,m3,m4,m5 = st.columns(5)
-m1.metric("Premiação contratos", f"R$ {total_contract:,.2f}")
-m2.metric("Premiação faturas", f"R$ {total_invoices:,.2f}")
-m3.metric("Total apurado", f"R$ {total_contract+total_invoices:,.2f}")
-m4.metric("Contratos elegíveis", int(filtered_contracts["Status comissão"].eq("ELEGÍVEL").sum()) if not filtered_contracts.empty else 0)
-m5.metric("Ciclos encerrados", int(filtered_clients["Status ciclo"].astype(str).str.startswith("ENCERRADA").sum()) if not filtered_clients.empty else 0)
+total_billed = float(filtered_invoices["Valor faturado (R$)"].sum()) if not filtered_invoices.empty else 0.0
+active_cycles = int(filtered_clients["Status ciclo"].eq("EM ANDAMENTO").sum()) if not filtered_clients.empty else 0
+closed_cycles = int(filtered_clients["Status ciclo"].astype(str).str.startswith("ENCERRADA").sum()) if not filtered_clients.empty else 0
+pending_cycles = int(filtered_clients["Status ciclo"].eq("ENCERRADA COM PENDÊNCIA").sum()) if not filtered_clients.empty else 0
+
+render_kpis([
+    {"label":"Total apurado","value":_brl(total_contract+total_invoices),"detail":"Contrato + M1–M3 nos filtros","accent":"#2563eb"},
+    {"label":"Faturamento M1–M3","value":_brl(total_billed),"detail":"Valor faturado nas competências exibidas","accent":"#0f766e"},
+    {"label":"Ciclos ativos","value":str(active_cycles),"detail":"Ainda dentro da janela de três meses","accent":"#d97706"},
+    {"label":"Ciclos encerrados","value":str(closed_cycles),"detail":"Janela M1–M3 finalizada","accent":"#475569"},
+    {"label":"Pendências","value":str(pending_cycles),"detail":"Ciclo encerrado com mês sem faturamento","accent":"#dc2626"},
+])
+
+st.caption(
+    "**Status atual** mostra a situação hoje. **Gerou comissão?** preserva o histórico. "
+    "Ex.: uma competência de 08/2025 pode ter gerado comissão, mas hoje aparecer como "
+    "**ENCERRADA / APURADA**."
+)
 
 st.markdown("### Resumo por vendedor")
 if filtered_clients.empty:
     grouped = pd.DataFrame(columns=["Vendedor","Clientes","Premiação contrato (R$)","Premiação faturas M1-M3 (R$)","Total a pagar (R$)"])
 else:
-    grouped = filtered_clients.groupby("Vendedor", as_index=False).agg(Clientes=("Cliente","nunique"), Premiação_Contrato=("Premiação contrato (R$)","sum"), Premiação_Faturas=("Premiação faturas M1-M3 (R$)","sum"), Total=("Total premiação (R$)","sum")).rename(columns={"Premiação_Contrato":"Premiação contrato (R$)","Premiação_Faturas":"Premiação faturas M1-M3 (R$)","Total":"Total a pagar (R$)"})
-st.dataframe(grouped, hide_index=True, use_container_width=True, column_config={"Premiação contrato (R$)":st.column_config.NumberColumn(format="R$ %.2f"),"Premiação faturas M1-M3 (R$)":st.column_config.NumberColumn(format="R$ %.2f"),"Total a pagar (R$)":st.column_config.NumberColumn(format="R$ %.2f")})
+    grouped = filtered_clients.groupby("Vendedor", as_index=False).agg(
+        Clientes=("Cliente","nunique"),
+        Premiação_Contrato=("Premiação contrato (R$)","sum"),
+        Premiação_Faturas=("Premiação faturas M1-M3 (R$)","sum"),
+        Total=("Total premiação (R$)","sum"),
+    ).rename(columns={
+        "Premiação_Contrato":"Premiação contrato (R$)",
+        "Premiação_Faturas":"Premiação faturas M1-M3 (R$)",
+        "Total":"Total apurado (R$)",
+    })
+
+st.dataframe(grouped, hide_index=True, use_container_width=True, column_config={
+    "Premiação contrato (R$)":st.column_config.NumberColumn(format="R$ %.2f"),
+    "Premiação faturas M1-M3 (R$)":st.column_config.NumberColumn(format="R$ %.2f"),
+    "Total apurado (R$)":st.column_config.NumberColumn(format="R$ %.2f"),
+})
+
+monthly = {}
+for _, row in filtered_contracts.iterrows():
+    p = str(row.get("Competência") or "")
+    if p:
+        monthly.setdefault(p, {"billing":0.0,"reward":0.0})
+        monthly[p]["reward"] += float(row.get("Premiação contrato (R$)") or 0)
+for _, row in filtered_invoices.iterrows():
+    p = str(row.get("Competência") or "")
+    if p:
+        monthly.setdefault(p, {"billing":0.0,"reward":0.0})
+        monthly[p]["billing"] += float(row.get("Valor faturado (R$)") or 0)
+        monthly[p]["reward"] += float(row.get("Premiação fatura (R$)") or 0)
+
+monthly_data = [
+    {"period":p,"billing":v["billing"],"reward":v["reward"]}
+    for p,v in sorted(monthly.items())
+]
+cycle_data = []
+if not filtered_clients.empty:
+    cycle_data = [
+        {"category":str(k),"value":int(v)}
+        for k,v in filtered_clients["Status ciclo"].value_counts().items()
+    ]
+seller_data = []
+if not grouped.empty:
+    seller_data = [
+        {"seller":str(r["Vendedor"]),"value":float(r["Total apurado (R$)"] or 0)}
+        for _,r in grouped.sort_values("Total apurado (R$)",ascending=False).head(12).iterrows()
+    ]
+
+st.markdown("### Visão analítica")
+render_charts(monthly_data, cycle_data, seller_data)
 
 t1,t2,t3 = st.tabs(["Etapa 1 — Contrato","Consolidado por cliente","Etapa 2 — Faturas M1-M3"])
 with t1:
     view = filtered_contracts.drop(columns=["Ano","Mês nº"], errors="ignore")
     if view.empty: st.info("Nenhuma comissão de contrato para os filtros selecionados.")
-    else: st.dataframe(style_rows(view,"Status comissão"), hide_index=True, use_container_width=True, column_config={"Margem contrato (%)":st.column_config.NumberColumn(format="%.2f%%"),"Premiação contrato (R$)":st.column_config.NumberColumn(format="R$ %.2f")})
+    else: st.dataframe(style_rows(view,"Status atual"), hide_index=True, use_container_width=True, column_config={"Margem contrato (%)":st.column_config.NumberColumn(format="%.2f%%"),"Premiação contrato (R$)":st.column_config.NumberColumn(format="R$ %.2f")})
 with t2:
     if filtered_clients.empty: st.info("Nenhum cliente para os filtros selecionados.")
     else: st.dataframe(style_rows(filtered_clients,"Status ciclo"), hide_index=True, use_container_width=True, column_config={"Premiação contrato (R$)":st.column_config.NumberColumn(format="R$ %.2f"),"Premiação faturas M1-M3 (R$)":st.column_config.NumberColumn(format="R$ %.2f"),"Total premiação (R$)":st.column_config.NumberColumn(format="R$ %.2f")})
 with t3:
     view = filtered_invoices.drop(columns=["Ano","Mês nº"], errors="ignore")
     if view.empty: st.info("Nenhuma competência M1-M3 para os filtros selecionados.")
-    else: st.dataframe(style_rows(view,"Status comissão"), hide_index=True, use_container_width=True, column_config={"Valor faturado (R$)":st.column_config.NumberColumn(format="R$ %.2f"),"Taxa efetiva (%)":st.column_config.NumberColumn(format="%.2f%%"),"Premiação fatura (R$)":st.column_config.NumberColumn(format="R$ %.2f")})
+    else: st.dataframe(style_rows(view,"Status atual"), hide_index=True, use_container_width=True, column_config={"Valor faturado (R$)":st.column_config.NumberColumn(format="R$ %.2f"),"Taxa efetiva (%)":st.column_config.NumberColumn(format="%.2f%%"),"Premiação fatura (R$)":st.column_config.NumberColumn(format="R$ %.2f")})
 
 
 def to_excel() -> bytes:

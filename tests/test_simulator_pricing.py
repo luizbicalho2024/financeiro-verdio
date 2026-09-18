@@ -5,6 +5,8 @@ import unittest
 from app_core.simulator_pricing import (
     billing_type_for_product,
     calculate_contract_margin,
+    commission_cycle_state,
+    commission_period_state,
     eligible_billing_periods,
     first_three_billings,
     legacy_equipment_pricing,
@@ -103,6 +105,41 @@ class SimulatorPricingTests(unittest.TestCase):
             [item["period_key"] for item in result],
             ["2026-07", "2026-08", "2026-09"],
         )
+
+
+    def test_old_invoice_is_closed_not_currently_eligible(self):
+        self.assertEqual(
+            commission_period_state(
+                period="2025-08",
+                cycle_end="2025-09",
+                current_period="2026-09",
+                has_billing=True,
+                billed_value=1000.0,
+                reward_value=20.0,
+            ),
+            "ENCERRADA / APURADA",
+        )
+
+    def test_old_complete_cycle_is_closed(self):
+        self.assertEqual(
+            commission_cycle_state(
+                ["2025-07", "2025-08", "2025-09"],
+                ["2025-07", "2025-08", "2025-09"],
+                "2026-09",
+            ),
+            "ENCERRADA (3/3)",
+        )
+
+    def test_old_incomplete_cycle_has_pending_status(self):
+        self.assertEqual(
+            commission_cycle_state(
+                ["2025-07", "2025-08", "2025-09"],
+                ["2025-07", "2025-08"],
+                "2026-09",
+            ),
+            "ENCERRADA COM PENDÊNCIA",
+        )
+
 
 
 if __name__ == "__main__":

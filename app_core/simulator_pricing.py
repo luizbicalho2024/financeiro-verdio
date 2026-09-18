@@ -442,6 +442,70 @@ def eligible_billing_periods(
     return periods
 
 
+
+def commission_cycle_state(
+    periods: Iterable[str],
+    billed_periods: Iterable[str],
+    current_period: str,
+) -> str:
+    window = [str(p) for p in periods if str(p)]
+    if not window:
+        return "SEM JANELA"
+
+    billed = {str(p) for p in billed_periods if str(p)}
+    count = sum(1 for p in window if p in billed)
+
+    if current_period < window[0]:
+        return "AGUARDANDO INÍCIO"
+    if current_period > window[-1]:
+        return (
+            f"ENCERRADA ({len(window)}/{len(window)})"
+            if count >= len(window)
+            else "ENCERRADA COM PENDÊNCIA"
+        )
+    return "EM ANDAMENTO"
+
+
+def commission_period_state(
+    *,
+    period: str,
+    cycle_end: str,
+    current_period: str,
+    has_billing: bool,
+    billed_value: float,
+    reward_value: float,
+) -> str:
+    period = str(period or "")
+    cycle_end = str(cycle_end or "")
+    current_period = str(current_period or "")
+    billed_value = float(billed_value or 0)
+    reward_value = float(reward_value or 0)
+
+    if current_period > cycle_end:
+        if not has_billing:
+            return "ENCERRADA SEM FATURAMENTO"
+        if billed_value <= 0 or reward_value <= 0:
+            return "ENCERRADA SEM COMISSÃO"
+        return "ENCERRADA / APURADA"
+
+    if period > current_period:
+        return "AGUARDANDO"
+
+    if period == current_period:
+        if not has_billing:
+            return "AGUARDANDO FATURAMENTO"
+        if billed_value <= 0 or reward_value <= 0:
+            return "NÃO ELEGÍVEL"
+        return "ELEGÍVEL ATUAL"
+
+    if not has_billing:
+        return "SEM FATURAMENTO"
+    if billed_value <= 0 or reward_value <= 0:
+        return "NÃO ELEGÍVEL"
+    return "APURADA"
+
+
+
 def first_three_billings(
     history: Iterable[dict[str, Any]],
     client_name: str,
