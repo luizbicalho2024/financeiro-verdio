@@ -1,32 +1,36 @@
 # Premiação de vendedores — política Verdio
 
-## Fonte de dados
+## Etapa 1 — Contrato
 
-- Produtos, preços, custos e instalação: `simulador_db.pricing_config`, documento `global_prices`.
-- Contratos: `client_contracts`.
-- Faturamento real: `billing_history` e, quando necessário, `billing_runs/items`.
-- Vendedor: campo `vendedor` do contrato. O mapeamento legado em `settings/seller_mappings` é apenas fallback.
+- O vendedor vem do cadastro do contrato.
+- A premiação de contrato é calculada por ativação/unidade contratada.
+- Contratos com margem comprovada abaixo de 15% não são elegíveis.
+- Contratos sem custo suficiente para comprovar a margem também ficam não elegíveis.
+- A competência da premiação de contrato é o mês da data do termo/assinatura.
 
-## Regra implantada
+## Etapa 2 — Faturamento M1, M2 e M3
 
-A premiação possui duas etapas:
+A janela é fixa nos três meses imediatamente posteriores ao mês da data do contrato.
 
-1. **Contrato**
-   - mantém o valor configurável já existente como `bonus_ativacao`;
-   - paga uma única vez por unidade contratada;
-   - só é elegível quando a margem contratual comprovada for maior ou igual a 15%;
-   - contratos sem custo cadastrado no Simulador ficam com margem pendente e não recebem a etapa de contrato.
+Exemplo: contrato em 20/06/2026 -> M1 07/2026, M2 08/2026 e M3 09/2026.
 
-2. **Três primeiras faturas**
-   - usa exclusivamente as três primeiras competências faturadas após a assinatura/termo;
-   - mantém as faixas anteriores: `<80%=0%`, `80% a <100%=2%`, `100% a <120%=15%`, `>=120%=30%`;
-   - a faixa é calculada pelo valor unitário do contrato versus o preço-base do Simulador;
-   - a comissão é aplicada ao valor efetivamente faturado, preservando o pró-rata.
+Se uma competência não possuir faturamento, ela permanece sem faturamento e não é substituída por M4.
 
-A restrição de margem de 15% foi aplicada à etapa de contrato, conforme a regra informada. A etapa de faturamento continua seguindo as faixas já existentes.
+A premiação pode ser configurada como:
 
-## Compatibilidade
+- faixas atuais por preço;
+- percentual único sobre o valor realmente faturado;
+- valor fixo por competência faturada.
 
-Contratos novos salvam o produto canônico do Simulador, quantidade, preço contratado, preço-base, custo e margem. Também continuam gravando `precos_por_tipo` para que as páginas de faturamento existentes permaneçam compatíveis.
+## Status do ciclo
 
-Contratos antigos são aceitos: o sistema tenta mapear `GPRS`, `SATELITE`, `CAMERA`, `CAN`, `RFID` e `RADIO` para os produtos atuais e usa a primeira fatura como fallback de mix quando a quantidade contratada não existe.
+- `AGUARDANDO INÍCIO`: M1 ainda não começou.
+- `EM ANDAMENTO`: a janela M1-M3 está em curso.
+- `ENCERRADA (3/3)`: as três competências possuem faturamento processado.
+- `ENCERRADA COM PENDÊNCIA`: a janela terminou e ao menos uma competência ficou sem faturamento.
+
+O status de encerramento representa a conclusão da apuração M1-M3. O sistema ainda não mantém um controle separado de liquidação/pagamento da comissão.
+
+## Consulta
+
+A página permite filtrar por vendedor, cliente, status do ciclo, ano, mês e elegibilidade do contrato. As tabelas destacam situações elegíveis em verde, não elegíveis/pendentes em vermelho e situações em andamento/aguardando em amarelo.
