@@ -1,227 +1,474 @@
-# pages/7_Contratos_Clientes.py
-import sys
-import os
-from datetime import datetime, date
-import calendar
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from app_core.ui import apply_branding, render_sidebar
+from __future__ import annotations
 
-import streamlit as st
+import calendar
+import os
+import sys
+from datetime import date, datetime
+
 import pandas as pd
 import plotly.express as px
-from mongo_config import db
-import user_management_db as umdb
+import streamlit as st
 
-st.set_page_config(layout="wide", page_title="Contratos e Preços por Cliente", page_icon="📝")
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
+from app_core.simulator_pricing import (
+    CONTRACT_MARGIN_FLOOR_PERCENT,
+    all_products,
+    billing_type_for_product,
+    calculate_contract_margin,
+    contract_product_values,
+    get_simulator_db_name,
+    get_simulator_pricing,
+    legacy_contract_prices,
+    product_price_cost,
+    select_plan_name,
+    sorted_plan_names,
+)
+from app_core.ui import apply_branding, render_sidebar
+from mongo_config import db
+
+st.set_page_config(
+    layout="wide",
+    page_title="Contratos e Preços por Cliente",
+    page_icon="📝",
+)
 apply_branding()
 
-# --- VERIFICAÇÃO DE LOGIN E PERMISSÃO ---
 if "user_info" not in st.session_state:
-    st.error("🔒 Acesso Negado! Por favor, faça login para visualizar esta página.")
+    st.error("Acesso negado. Faça login para visualizar esta página.")
     st.stop()
 
 if st.session_state.get("role", "Usuário").lower() != "admin":
-    st.error("🚫 Você não tem permissão para acessar esta página. Apenas Administradores.")
+    st.error("Esta página é restrita aos administradores.")
     st.stop()
 
-# --- BARRA LATERAL ---
 render_sidebar()
 
-# --- FUNÇÕES AUXILIARES ---
-def add_months(sourcedate, months):
-    """Adiciona meses a uma data considerando os limites do calendário (ex: ano bissexto)"""
-    month = sourcedate.month - 1 + months
-    year = sourcedate.year + month // 12
+
+def add_months(source_date: date, months: int) -> date:
+    month = source_date.month - 1 + months
+    year = source_date.year + month // 12
     month = month % 12 + 1
-    day = min(sourcedate.day, calendar.monthrange(year, month)[1])
+    day = min(source_date.day, calendar.monthrange(year, month)[1])
     return date(year, month, day)
 
-def get_contracts():
-    """Busca todos os contratos salvos no banco de dados"""
+
+def get_contracts() -> dict[str, dict]:
     try:
-        docs = db.collection("client_contracts").stream()
-        return {doc.id: doc.to_dict() for doc in docs}
-    except Exception as e:
-        st.error(f"Erro ao buscar contratos: {e}")
+        return {
+            document.id: document.to_dict()
+            for document in db.collection("client_contracts").stream()
+        }
+    except Exception as exc:
+        st.error(f"Erro ao buscar contratos: {exc}")
         return {}
 
-def save_contract(cliente_id, data):
-    """Salva ou atualiza um contrato"""
+
+def save_contract(client_id: str, data: dict) -> bool:
     try:
-        db.collection("client_contracts").document(cliente_id).set(data)
+        db.collection("client_contracts").document(client_id).set(data)
         return True
-    except Exception as e:
-        st.error(f"Erro ao salvar contrato: {e}")
+    except Exception as exc:
+        st.error(f"Erro ao salvar contrato: {exc}")
         return False
 
-def delete_contract(cliente_id):
-    """Exclui um contrato"""
+
+def delete_contract(client_id: str) -> bool:
     try:
-        db.collection("client_contracts").document(cliente_id).delete()
+        db.collection("client_contracts").document(client_id).delete()
         return True
-    except Exception as e:
-        st.error(f"Erro ao excluir contrato: {e}")
+    except Exception as exc:
+        st.error(f"Erro ao excluir contrato: {exc}")
         return False
 
-# --- CARREGAMENTO DE DADOS ---
-contratos = get_contracts()
 
-# Puxa os tipos de equipamento globais (GPRS, SATELITE, etc.) do banco
-pricing_config = umdb.get_pricing_config()
-tipos_equipamento = list(pricing_config.get("TIPO_EQUIPAMENTO", {}).keys())
-if not tipos_equipamento:
-    tipos_equipamento = ["GPRS", "SATELITE", "CAMERA", "RADIO"] # Fallback
+def _parse_date(value: str | None, fallback: date | None = None) -> date:
+    fallback = fallback or datetime.today().date()
+    try:
+        return datetime.strptime(str(value), "%Y-%m-%d").date()
+    except Exception:
+        return fallback
 
-# --- INTERFACE PRINCIPAL ---
+
+def _plan_months(plan_name: str) -> int:
+    digits = "".join(char for char in str(plan_name) if char.isdigit())
+    return max(1, int(digits or 12))
+
+
 st.title("COMERCIAL - Gestão de Contratos Verdio")
-st.markdown("Controle o termo de adesão, vencimento contratual e os valores personalizados cobrados por cada **Tipo de Equipamento**.")
+st.markdown(
+    "O contrato agora concentra o **vendedor**, o **mix contratado**, os preços negociados "
+    "e a margem usada na política de premiação."
+)
 
-# Invertemos a ordem das abas aqui para que a Lista seja a principal
-tab1, tab2 = st.tabs(["📋 Lista de Contratos Vigentes", "➕ Novo / Editar Contrato"])
+try:
+    pricing = get_simulator_pricing()
+except Exception as exc:
+    st.error(
+        "Não foi possível carregar a fonte oficial de preços do Simulador. "
+        f"Detalhe: {exc}"
+    )
+    st.stop()
 
-with tab1:
+plans = sorted_plan_names(pricing)
+products = all_products(pricing)
+if not plans or not products:
+    st.error("O Simulador não possui planos/produtos PJ configurados.")
+    st.stop()
+
+st.caption(
+    f"Fonte oficial de preços e custos: **{get_simulator_db_name()}.pricing_config / global_prices**. "
+    "A página não mantém uma tabela paralela."
+)
+
+contracts = get_contracts()
+
+tab_list, tab_edit = st.tabs(
+    ["Lista de Contratos Vigentes", "Novo / Editar Contrato"]
+)
+
+with tab_list:
     st.subheader("Painel de Contratos")
-    
-    if not contratos:
+    if not contracts:
         st.info("Nenhum contrato cadastrado na base de dados.")
     else:
-        lista_tabela = []
-        hoje = datetime.today().date()
-        
-        for k, v in contratos.items():
-            venc = datetime.strptime(v['vencimento_contrato'], "%Y-%m-%d").date()
-            status = "🟢 Vigente" if venc >= hoje else "🔴 Vencido"
-            
-            # Formata os preços maiores que zero para exibição no resumo da tabela
-            precos_ativos = [f"{m}: R${p:.2f}" for m, p in v.get("precos_por_tipo", {}).items() if p > 0]
-            resumo_precos = " | ".join(precos_ativos) if precos_ativos else "Nenhum valor fixo"
+        rows = []
+        today = datetime.today().date()
 
-            lista_tabela.append({
-                "Cliente": v.get("cliente", k),
-                "Assinatura/Termo": datetime.strptime(v['ultima_atualizacao_termo'], "%Y-%m-%d").strftime("%d/%m/%Y"),
-                "Prazo (Meses)": v.get("prazo_contrato_meses"),
-                "Vencimento": venc.strftime("%d/%m/%Y"),
-                "Status": status,
-                "Preços": resumo_precos
-            })
-        
-        # Exibe como um DataFrame interativo do Streamlit
-        df_contratos = pd.DataFrame(lista_tabela)
-        
-        # Ordenar pelo vencimento mais próximo
-        df_contratos['Vencimento_Date'] = pd.to_datetime(df_contratos['Vencimento'], format='%d/%m/%Y')
-        df_contratos = df_contratos.sort_values(by='Vencimento_Date').drop(columns=['Vencimento_Date'])
-        
-        # --- LAYOUT: TABELA E GRÁFICO LADO A LADO ---
-        col_tabela, col_grafico = st.columns([2, 1])
-        
-        with col_tabela:
-            st.dataframe(df_contratos, use_container_width=True, hide_index=True)
-            
-        with col_grafico:
-            # Agrupar os dados para o gráfico
-            status_counts = df_contratos['Status'].value_counts().reset_index()
-            status_counts.columns = ['Status', 'Quantidade']
-            
-            # Mapa de cores personalizado
-            color_map = {
-                "🟢 Vigente": "#28a745", # Verde
-                "🔴 Vencido": "#dc3545"  # Vermelho
-            }
-            
-            fig = px.pie(
-                status_counts, 
-                values='Quantidade', 
-                names='Status', 
-                title='Status Geral',
-                color='Status',
-                color_discrete_map=color_map,
-                hole=0.4 # Estilo de rosca para um visual mais moderno
+        for document_id, contract in contracts.items():
+            expiration = _parse_date(contract.get("vencimento_contrato"))
+            status = "Vigente" if expiration >= today else "Vencido"
+            margin = contract.get("margem_contrato_percentual")
+            costs_complete = bool(contract.get("custos_completos", margin is not None))
+            eligible = (
+                costs_complete
+                and margin is not None
+                and float(margin) >= CONTRACT_MARGIN_FLOOR_PERCENT
             )
-            fig.update_traces(textposition='inside', textinfo='percent+label')
-            fig.update_layout(showlegend=False, margin=dict(t=40, b=0, l=0, r=0))
-            
+
+            product_prices, product_quantities = contract_product_values(
+                contract, pricing
+            )
+            configured = [
+                f"{product}: {product_quantities.get(product, 0)} un. × R$ {price:.2f}"
+                for product, price in product_prices.items()
+                if price > 0 and product_quantities.get(product, 0) > 0
+            ]
+
+            rows.append(
+                {
+                    "Cliente": contract.get("cliente", document_id),
+                    "Vendedor": contract.get("vendedor", ""),
+                    "Assinatura/Termo": _parse_date(
+                        contract.get("ultima_atualizacao_termo")
+                    ).strftime("%d/%m/%Y"),
+                    "Prazo (meses)": int(
+                        contract.get("prazo_contrato_meses", 12) or 12
+                    ),
+                    "Plano de referência": contract.get(
+                        "plano_preco_simulador", ""
+                    ),
+                    "Vencimento": expiration.strftime("%d/%m/%Y"),
+                    "Status": status,
+                    "Margem (%)": float(margin) if margin is not None else None,
+                    "Premiação contrato": (
+                        "Elegível"
+                        if eligible
+                        else "Não elegível / margem pendente"
+                    ),
+                    "Mix contratado": " | ".join(configured) or "Não informado",
+                }
+            )
+
+        contracts_df = pd.DataFrame(rows)
+        contracts_df["Vencimento_Date"] = pd.to_datetime(
+            contracts_df["Vencimento"], format="%d/%m/%Y", errors="coerce"
+        )
+        contracts_df = contracts_df.sort_values(
+            by="Vencimento_Date", na_position="last"
+        ).drop(columns=["Vencimento_Date"])
+
+        table_col, chart_col = st.columns([2.6, 1])
+        with table_col:
+            st.dataframe(
+                contracts_df,
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "Margem (%)": st.column_config.NumberColumn(
+                        format="%.2f%%"
+                    )
+                },
+            )
+
+        with chart_col:
+            status_counts = (
+                contracts_df["Status"]
+                .value_counts()
+                .rename_axis("Status")
+                .reset_index(name="Quantidade")
+            )
+            fig = px.pie(
+                status_counts,
+                values="Quantidade",
+                names="Status",
+                title="Status geral",
+                hole=0.4,
+            )
+            fig.update_traces(textposition="inside", textinfo="percent+label")
+            fig.update_layout(
+                showlegend=False,
+                margin=dict(t=40, b=0, l=0, r=0),
+            )
             st.plotly_chart(fig, use_container_width=True)
-        
+
         st.markdown("---")
-        st.subheader("Ações Avançadas")
-        
-        cliente_excluir = st.selectbox("Deseja remover um contrato do banco de dados?", ["-- SELECIONE --"] + sorted(list(contratos.keys())))
-        if st.button("🗑️ Excluir Contrato", type="primary"):
-            if cliente_excluir != "-- SELECIONE --":
-                if delete_contract(cliente_excluir):
-                    st.success(f"O contrato de {cliente_excluir} foi excluído permanentemente.")
-                    st.rerun()
-            else:
-                st.warning("Selecione um contrato antes de clicar em excluir.")
+        st.subheader("Ações avançadas")
+        selected_delete = st.selectbox(
+            "Contrato para excluir",
+            ["-- SELECIONE --"] + sorted(contracts.keys()),
+        )
+        if st.button("Excluir Contrato", type="primary"):
+            if selected_delete == "-- SELECIONE --":
+                st.warning("Selecione um contrato.")
+            elif delete_contract(selected_delete):
+                st.success("Contrato excluído.")
+                st.rerun()
 
-with tab2:
-    st.subheader("Configuração de Contrato")
-    
-    opcoes_clientes = ["-- NOVO CLIENTE --"] + sorted(list(contratos.keys()))
-    cliente_selecionado = st.selectbox("Selecione um cliente existente para editar ou crie um novo:", opcoes_clientes)
-    
-    if cliente_selecionado == "-- NOVO CLIENTE --":
-        nome_cliente = st.text_input("Nome do Novo Cliente:")
-        dados_atuais = {}
+with tab_edit:
+    st.subheader("Configuração do contrato")
+
+    client_options = ["-- NOVO CLIENTE --"] + sorted(contracts.keys())
+    selected_client = st.selectbox(
+        "Selecione um cliente existente ou crie um novo:",
+        client_options,
+    )
+
+    if selected_client == "-- NOVO CLIENTE --":
+        client_name = st.text_input("Nome do novo cliente")
+        current = {}
     else:
-        nome_cliente = cliente_selecionado
-        st.text_input("Nome do Cliente (Fixo):", value=nome_cliente, disabled=True)
-        dados_atuais = contratos.get(cliente_selecionado, {})
+        client_name = selected_client
+        st.text_input("Nome do cliente", value=client_name, disabled=True)
+        current = contracts.get(selected_client, {})
 
-    if nome_cliente:
-        with st.form("form_contrato"):
-            st.markdown("### 📅 Termo de Adesão e Vencimento")
-            
-            # Formata a data atual caso já exista
-            dt_str = dados_atuais.get("ultima_atualizacao_termo", None)
-            dt_obj = datetime.strptime(dt_str, "%Y-%m-%d").date() if dt_str else datetime.today().date()
-            
-            c1, c2, c3 = st.columns([2, 2, 2])
-            with c1:
-                data_atualizacao = st.date_input("Última Atualização do Termo", value=dt_obj, format="DD/MM/YYYY")
-            with c2:
-                prazo_meses = st.number_input("Prazo de Contrato (meses)", min_value=1, max_value=120, value=dados_atuais.get("prazo_contrato_meses", 12), step=1)
-            
-            # Cálculo instantâneo do vencimento
-            vencimento = add_months(data_atualizacao, prazo_meses)
-            
-            with c3:
-                # Mostramos num info box chamativo a data que o sistema calculou
-                st.info(f"**Vencimento do Contrato:**\n\n🎯 {vencimento.strftime('%d/%m/%Y')}")
+    if client_name.strip():
+        current_months = int(current.get("prazo_contrato_meses", 12) or 12)
+        current_plan = (
+            current.get("plano_preco_simulador")
+            or select_plan_name(pricing, current_months)
+            or plans[0]
+        )
+        if current_plan not in plans:
+            current_plan = select_plan_name(pricing, current_months) or plans[0]
 
-            st.markdown("---")
-            st.markdown("### 💰 Valores Personalizados por Tipo de Equipamento")
-            st.caption("Insira os valores acordados para este cliente por cada tipo (GPRS, Satélite, etc.). Deixe zerado (0.00) caso não haja preço específico para o tipo.")
-            
-            precos_atuais = dados_atuais.get("precos_por_tipo", {})
-            
-            # Renderiza inputs de forma dinâmica de acordo com os tipos baseados no estoque/configuração
-            cols = st.columns(4)
-            idx = 0
-            novos_precos = {}
-            for tipo in sorted(tipos_equipamento):
-                val_atual = float(precos_atuais.get(tipo, 0.0))
-                with cols[idx % 4]:
-                    novos_precos[tipo] = st.number_input(f"{tipo} (R$)", min_value=0.0, value=val_atual, format="%.2f", key=f"preco_{tipo}")
-                idx += 1
+        selected_plan = st.selectbox(
+            "Plano/prazo usado como referência do Simulador",
+            plans,
+            index=plans.index(current_plan),
+            help=(
+                "Os preços e custos de referência vêm diretamente do Simulador. "
+                "O preço do contrato pode ser diferente; ele é o valor efetivamente negociado."
+            ),
+        )
+        contract_months = _plan_months(selected_plan)
 
-            st.markdown("<br>", unsafe_allow_html=True)
-            submit_btn = st.form_submit_button("💾 Salvar Contrato e Preços", type="primary")
-            
-            if submit_btn:
-                if not nome_cliente.strip():
-                    st.error("O nome do cliente não pode estar vazio.")
-                else:
-                    # Monta o pacote de dados para salvar no MongoDB
-                    dados_salvar = {
-                        "cliente": nome_cliente.strip(),
-                        "ultima_atualizacao_termo": data_atualizacao.strftime("%Y-%m-%d"),
-                        "prazo_contrato_meses": int(prazo_meses),
-                        "vencimento_contrato": vencimento.strftime("%Y-%m-%d"),
-                        "precos_por_tipo": novos_precos,
-                        "atualizado_em": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    }
-                    if save_contract(nome_cliente.strip(), dados_salvar):
-                        st.success(f"Contrato e tabela de preços de {nome_cliente} salvos com sucesso!")
-                        st.rerun()
+        current_prices, current_quantities = contract_product_values(
+            current, pricing
+        )
+        pricing_rows = []
+        for product in products:
+            base_price, base_cost = product_price_cost(
+                pricing, selected_plan, product
+            )
+            saved_price = float(current_prices.get(product, 0.0) or 0.0)
+            pricing_rows.append(
+                {
+                    "Produto": product,
+                    "Tipo faturamento": billing_type_for_product(product),
+                    "Preço tabela (R$)": base_price,
+                    "Custo referência (R$)": base_cost,
+                    "Preço contrato (R$)": (
+                        saved_price if saved_price > 0 else base_price
+                    ),
+                    "Quantidade": int(
+                        current_quantities.get(product, 0) or 0
+                    ),
+                }
+            )
+
+        with st.form("contract_form"):
+            st.markdown("### Responsável comercial e vigência")
+            date_col, seller_col, expiration_col = st.columns([1, 1.4, 1])
+
+            with date_col:
+                signature_date = st.date_input(
+                    "Data do termo/assinatura",
+                    value=_parse_date(
+                        current.get("ultima_atualizacao_termo")
+                    ),
+                    format="DD/MM/YYYY",
+                )
+
+            with seller_col:
+                seller_name = st.text_input(
+                    "Nome do vendedor",
+                    value=str(current.get("vendedor", "") or ""),
+                    placeholder="Ex.: João da Silva",
+                    help=(
+                        "Este campo passa a ser a fonte principal da página de comissão."
+                    ),
+                )
+
+            expiration = add_months(signature_date, contract_months)
+            with expiration_col:
+                st.info(
+                    f"**Vencimento**\n\n{expiration.strftime('%d/%m/%Y')}"
+                )
+
+            st.markdown("### Produtos, preços e quantidades contratadas")
+            st.caption(
+                "Informe a quantidade efetivamente contratada. A margem do contrato "
+                "é ponderada pelo mix de produtos e usa o custo do plano selecionado."
+            )
+
+            editor = st.data_editor(
+                pd.DataFrame(pricing_rows),
+                hide_index=True,
+                use_container_width=True,
+                num_rows="fixed",
+                column_config={
+                    "Produto": st.column_config.TextColumn(disabled=True),
+                    "Tipo faturamento": st.column_config.TextColumn(
+                        disabled=True
+                    ),
+                    "Preço tabela (R$)": st.column_config.NumberColumn(
+                        format="R$ %.2f", disabled=True
+                    ),
+                    "Custo referência (R$)": st.column_config.NumberColumn(
+                        format="R$ %.2f", disabled=True
+                    ),
+                    "Preço contrato (R$)": st.column_config.NumberColumn(
+                        min_value=0.0, format="R$ %.2f"
+                    ),
+                    "Quantidade": st.column_config.NumberColumn(
+                        min_value=0,
+                        step=1,
+                        format="%d",
+                    ),
+                },
+                key=f"contract_mix_{selected_client}_{selected_plan}",
+            )
+
+            submitted = st.form_submit_button(
+                "Salvar contrato",
+                type="primary",
+                use_container_width=True,
+            )
+
+        if submitted:
+            if not client_name.strip():
+                st.error("O nome do cliente é obrigatório.")
+            elif not seller_name.strip():
+                st.error("Informe o vendedor responsável pelo contrato.")
+            else:
+                product_prices = {
+                    str(row["Produto"]): float(
+                        row["Preço contrato (R$)"] or 0.0
+                    )
+                    for _, row in editor.iterrows()
+                }
+                product_quantities = {
+                    str(row["Produto"]): max(
+                        0, int(row["Quantidade"] or 0)
+                    )
+                    for _, row in editor.iterrows()
+                }
+
+                active_products = [
+                    product
+                    for product, quantity in product_quantities.items()
+                    if quantity > 0
+                ]
+                if not active_products:
+                    st.error(
+                        "Informe a quantidade de pelo menos um produto contratado."
+                    )
+                    st.stop()
+
+                margin_result = calculate_contract_margin(
+                    pricing,
+                    contract_months,
+                    product_prices,
+                    product_quantities,
+                )
+                margin = margin_result["margin_percent"]
+                costs_complete = bool(margin_result["costs_complete"])
+                eligible = (
+                    costs_complete
+                    and margin is not None
+                    and float(margin) >= CONTRACT_MARGIN_FLOOR_PERCENT
+                )
+
+                table_snapshot = {}
+                cost_snapshot = {}
+                for product in products:
+                    base_price, base_cost = product_price_cost(
+                        pricing, selected_plan, product
+                    )
+                    table_snapshot[product] = base_price
+                    cost_snapshot[product] = base_cost
+
+                payload = {
+                    "cliente": client_name.strip(),
+                    "vendedor": seller_name.strip(),
+                    "ultima_atualizacao_termo": signature_date.strftime(
+                        "%Y-%m-%d"
+                    ),
+                    "prazo_contrato_meses": contract_months,
+                    "vencimento_contrato": expiration.strftime("%Y-%m-%d"),
+                    "plano_preco_simulador": selected_plan,
+                    "precos_produtos": product_prices,
+                    "quantidades_produtos": product_quantities,
+                    # Compatibilidade com o faturamento atual.
+                    "precos_por_tipo": legacy_contract_prices(product_prices),
+                    # Snapshot econômico: contratos antigos não mudam de margem
+                    # quando a tabela do Simulador for reajustada no futuro.
+                    "precos_tabela_produtos": table_snapshot,
+                    "custos_produtos": cost_snapshot,
+                    "margem_contrato_percentual": (
+                        float(margin) if margin is not None else None
+                    ),
+                    "custos_completos": costs_complete,
+                    "margem_minima_premiacao_percentual": (
+                        CONTRACT_MARGIN_FLOOR_PERCENT
+                    ),
+                    "elegivel_premiacao_contrato": eligible,
+                    "pricing_source": {
+                        "database": get_simulator_db_name(),
+                        "collection": "pricing_config",
+                        "document": "global_prices",
+                    },
+                    "atualizado_em": datetime.now().strftime(
+                        "%Y-%m-%d %H:%M:%S"
+                    ),
+                }
+
+                if save_contract(client_name.strip(), payload):
+                    if not costs_complete:
+                        st.warning(
+                            "Contrato salvo, mas existem custos zerados no Simulador. "
+                            "A etapa de premiação do contrato ficará inelegível até a margem poder ser comprovada."
+                        )
+                    elif eligible:
+                        st.success(
+                            f"Contrato salvo. Margem calculada: {margin:.2f}% — "
+                            "elegível para a etapa de premiação do contrato."
+                        )
+                    else:
+                        st.warning(
+                            f"Contrato salvo. Margem calculada: {margin:.2f}% — "
+                            f"abaixo do piso de {CONTRACT_MARGIN_FLOOR_PERCENT:.0f}% e, portanto, "
+                            "não elegível para a etapa de premiação do contrato."
+                        )
+                    st.rerun()

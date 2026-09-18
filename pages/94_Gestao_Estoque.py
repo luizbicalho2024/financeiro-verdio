@@ -12,6 +12,12 @@ from app_core.inventory_import import (
     build_model_type_mapping,
     parse_inventory_report,
 )
+from app_core.simulator_pricing import (
+    clear_simulator_pricing_cache,
+    get_simulator_db_name,
+    get_simulator_pricing,
+    pricing_matrix,
+)
 from app_core.ui import apply_branding, render_sidebar
 import user_management_db as umdb
 
@@ -35,89 +41,57 @@ render_sidebar()
 st.title("Gestão de Estoque e Preços")
 st.markdown(
     "Atualize o inventário de rastreadores a partir da exportação do sistema atual "
-    "e gerencie preços e classificação dos equipamentos."
+    "e consulte preços sincronizados com o Simulador, além da classificação dos equipamentos."
 )
 
 with st.expander(
-    "Gerenciar Tabelas de Preços por Tipo de Equipamento",
+    "Preços e produtos sincronizados com o Simulador",
     expanded=True,
 ):
     st.info(
-        "Defina até três faixas de preço para cada tipo de equipamento."
+        "Esta seção é somente leitura. Produtos, preços, custos e instalação vêm "
+        "diretamente da aba 'Preços e produtos' do Simulador de Telemetria."
     )
 
-    pricing_config = umdb.get_pricing_config()
-    tipo_equip_data = pricing_config.get("TIPO_EQUIPAMENTO", {})
-
-    table_data = []
-    for tipo, precos in tipo_equip_data.items():
-        if isinstance(precos, (int, float)):
-            value = float(precos)
-            precos = {
-                "price1": value,
-                "price2": value,
-                "price3": value,
-            }
-        elif not isinstance(precos, dict):
-            precos = {}
-
-        table_data.append(
-            {
-                "Tipo Equipamento": tipo,
-                "Preço 1 (R$)": precos.get("price1", 0.0),
-                "Preço 2 (R$)": precos.get("price2", 0.0),
-                "Preço 3 (R$)": precos.get("price3", 0.0),
-            }
-        )
-
-    df_prices = pd.DataFrame(table_data)
-
-    edited_df = st.data_editor(
-        df_prices,
-        column_config={
-            "Tipo Equipamento": st.column_config.TextColumn(
-                "Tipo",
-                disabled=True,
-            ),
-            "Preço 1 (R$)": st.column_config.NumberColumn(
-                "Preço 1 (Padrão)",
-                format="R$ %.2f",
-                min_value=0.0,
-            ),
-            "Preço 2 (R$)": st.column_config.NumberColumn(
-                "Preço 2",
-                format="R$ %.2f",
-                min_value=0.0,
-            ),
-            "Preço 3 (R$)": st.column_config.NumberColumn(
-                "Preço 3",
-                format="R$ %.2f",
-                min_value=0.0,
-            ),
-        },
-        use_container_width=True,
-        hide_index=True,
-        key="price_editor",
-    )
-
-    if st.button("Salvar Tabela de Preços", type="primary"):
-        new_pricing_config = {}
-
-        for _, row in edited_df.iterrows():
-            tipo = row["Tipo Equipamento"]
-            new_pricing_config[tipo] = {
-                "price1": float(row["Preço 1 (R$)"]),
-                "price2": float(row["Preço 2 (R$)"]),
-                "price3": float(row["Preço 3 (R$)"]),
-            }
-
-        if umdb.update_pricing_config(
-            {"TIPO_EQUIPAMENTO": new_pricing_config}
-        ):
-            st.success("Tabelas de preços atualizadas.")
-            st.rerun()
+    try:
+        simulator_pricing = get_simulator_pricing()
+        price_rows = pricing_matrix(simulator_pricing)
+        if not price_rows:
+            st.warning("Nenhum produto PJ foi encontrado no Simulador.")
         else:
-            st.error("Não foi possível salvar os preços.")
+            df_prices = pd.DataFrame(price_rows)
+            column_config = {}
+            for column in df_prices.columns:
+                if column.startswith("Preço ") or column.startswith("Custo ") or column.startswith("Instalação "):
+                    column_config[column] = st.column_config.NumberColumn(
+                        format="R$ %.2f"
+                    )
+                elif column.startswith("Margem "):
+                    column_config[column] = st.column_config.NumberColumn(
+                        format="%.2f%%"
+                    )
+
+            st.dataframe(
+                df_prices,
+                use_container_width=True,
+                hide_index=True,
+                column_config=column_config,
+            )
+            st.caption(
+                "Fonte: "
+                f"{get_simulator_db_name()}.pricing_config / global_prices. "
+                "Para alterar qualquer valor, faça a edição no Simulador."
+            )
+
+        if st.button("Atualizar preços do Simulador agora"):
+            clear_simulator_pricing_cache()
+            st.cache_data.clear()
+            st.rerun()
+    except Exception as exc:
+        st.error(
+            "Não foi possível ler os preços do Simulador. "
+            f"Detalhe: {exc}"
+        )
 
 st.markdown("---")
 
