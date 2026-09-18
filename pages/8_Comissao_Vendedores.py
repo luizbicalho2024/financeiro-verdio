@@ -35,8 +35,7 @@ from mongo_config import db
 import user_management_db as umdb
 
 st.set_page_config(layout="wide", page_title="Premiação de Vendedores", page_icon="💰")
-apply_branding()
-
+branding = apply_branding()
 if "user_info" not in st.session_state:
     st.error("Acesso negado. Faça login para continuar.")
     st.stop()
@@ -64,38 +63,56 @@ def _brl(value: float) -> str:
 
 
 def render_kpis(cards: list[dict[str, str]]) -> None:
-    body = []
-    for card in cards:
-        body.append(
+    palette = [
+        str(branding["primary_color"]),
+        str(branding["secondary_color"]),
+        str(branding["accent_color"]),
+        str(branding["secondary_color"]),
+        str(branding["accent_color"]),
+    ]
+    surface = html.escape(str(branding["surface_color"]))
+    text_color = html.escape(str(branding["text_color"]))
+    muted = html.escape(str(branding["muted_text_color"]))
+    border = html.escape(str(branding["border_color"]))
+
+    blocks: list[str] = []
+    for index, card in enumerate(cards):
+        accent = html.escape(palette[index % len(palette)])
+        blocks.append(
             f"""
-            <div class="kpi" style="--accent:{html.escape(card['accent'])}">
-              <div class="kpi-label">{html.escape(card['label'])}</div>
-              <div class="kpi-value">{html.escape(card['value'])}</div>
-              <div class="kpi-detail">{html.escape(card['detail'])}</div>
-            </div>
+            <article class="kpi" style="--accent:{accent}">
+              <div class="kpi-label">{html.escape(str(card["label"]))}</div>
+              <div class="kpi-value">{html.escape(str(card["value"]))}</div>
+              <div class="kpi-detail">{html.escape(str(card["detail"]))}</div>
+            </article>
             """
         )
 
-    st.markdown(
-        """
-        <style>
-        .kpi-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));
-        gap:14px;margin:8px 0 22px}
-        .kpi{position:relative;background:linear-gradient(145deg,#fff,#f8fafc);
-        border:1px solid #e2e8f0;border-radius:16px;padding:18px;min-height:126px;
-        box-shadow:0 7px 22px rgba(15,23,42,.07);overflow:hidden}
-        .kpi:before{content:"";position:absolute;left:0;top:0;width:100%;height:4px;
-        background:var(--accent)}
-        .kpi-label{font-size:.76rem;font-weight:700;color:#64748b;
-        text-transform:uppercase;letter-spacing:.05em;margin-bottom:10px}
-        .kpi-value{font-size:1.5rem;font-weight:800;color:#0f172a;white-space:nowrap}
-        .kpi-detail{font-size:.75rem;color:#64748b;margin-top:10px;line-height:1.3}
-        @media(max-width:1100px){.kpi-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
-        </style>
-        <div class="kpi-grid">
-        """ + "".join(body) + "</div>",
-        unsafe_allow_html=True,
-    )
+    source = f"""
+    <!doctype html>
+    <html>
+    <head>
+      <meta charset="utf-8">
+      <style>
+        *{{box-sizing:border-box}}
+        html,body{{margin:0;padding:0;background:transparent;font-family:Inter,Segoe UI,Arial,sans-serif}}
+        .kpi-grid{{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:14px;padding:2px 1px 8px}}
+        .kpi{{position:relative;overflow:hidden;min-height:126px;padding:18px;border:1px solid {border};border-radius:16px;background:{surface};box-shadow:0 7px 22px rgba(15,23,42,.07)}}
+        .kpi:before{{content:"";position:absolute;left:0;top:0;width:100%;height:4px;background:var(--accent)}}
+        .kpi:after{{content:"";position:absolute;top:-34px;right:-34px;width:78px;height:78px;border-radius:50%;background:var(--accent);opacity:.08}}
+        .kpi-label{{margin-bottom:10px;color:{muted};font-size:.75rem;font-weight:750;letter-spacing:.055em;text-transform:uppercase}}
+        .kpi-value{{color:{text_color};font-size:1.48rem;font-weight:800;line-height:1.12;white-space:nowrap}}
+        .kpi-detail{{margin-top:10px;color:{muted};font-size:.74rem;line-height:1.35}}
+        @media(max-width:1050px){{.kpi-grid{{grid-template-columns:repeat(2,minmax(0,1fr))}}}}
+      </style>
+    </head>
+    <body>
+      <section class="kpi-grid">{''.join(blocks)}</section>
+    </body>
+    </html>
+    """
+
+    components.html(source, height=154, scrolling=False)
 
 
 def _js(value: Any) -> str:
@@ -107,6 +124,14 @@ def render_charts(
     cycles: list[dict[str, Any]],
     sellers: list[dict[str, Any]],
 ) -> None:
+    primary = str(branding["primary_color"])
+    secondary = str(branding["secondary_color"])
+    accent = str(branding["accent_color"])
+    surface = str(branding["surface_color"])
+    text_color = str(branding["text_color"])
+    muted = str(branding["muted_text_color"])
+    border = str(branding["border_color"])
+
     source = f"""
     <!doctype html>
     <html>
@@ -117,64 +142,86 @@ def render_charts(
       <script src="https://cdn.amcharts.com/lib/5/percent.js"></script>
       <script src="https://cdn.amcharts.com/lib/5/themes/Animated.js"></script>
       <style>
-        *{{box-sizing:border-box}} body{{margin:0;font-family:Inter,Segoe UI,Arial,sans-serif}}
+        *{{box-sizing:border-box}}
+        html,body{{margin:0;padding:0;background:transparent;color:{text_color};font-family:Inter,Segoe UI,Arial,sans-serif}}
         .grid{{display:grid;grid-template-columns:1.4fr 1fr;gap:14px}}
-        .card{{background:#fff;border:1px solid #e2e8f0;border-radius:16px;
-        box-shadow:0 7px 22px rgba(15,23,42,.06);padding:14px;overflow:hidden}}
+        .card{{overflow:hidden;padding:14px;border:1px solid {border};border-radius:16px;background:{surface};box-shadow:0 7px 22px rgba(15,23,42,.06)}}
         .wide{{grid-column:1/-1}}
-        .title{{font-size:15px;font-weight:800;color:#0f172a;margin:0 0 3px 4px}}
-        .sub{{font-size:11px;color:#64748b;margin:0 0 8px 4px}}
-        #monthly,#cycles{{height:320px;width:100%}} #sellers{{height:340px;width:100%}}
+        .title{{margin:0 0 3px 4px;color:{text_color};font-size:15px;font-weight:800}}
+        .sub{{margin:0 0 8px 4px;color:{muted};font-size:11px}}
+        #monthly,#cycles{{width:100%;height:320px}}
+        #sellers{{width:100%;height:340px}}
       </style>
     </head>
     <body>
       <div class="grid">
-        <div class="card"><div class="title">Evolução mensal</div>
-        <div class="sub">Faturamento M1–M3 x premiação apurada</div><div id="monthly"></div></div>
-        <div class="card"><div class="title">Situação dos ciclos</div>
-        <div class="sub">Status atual das janelas M1–M3</div><div id="cycles"></div></div>
-        <div class="card wide"><div class="title">Premiação por vendedor</div>
-        <div class="sub">Total apurado nos filtros atuais</div><div id="sellers"></div></div>
+        <section class="card">
+          <div class="title">Evolu\u00e7\u00e3o mensal</div>
+          <div class="sub">Faturamento M1-M3 x premia\u00e7\u00e3o apurada</div>
+          <div id="monthly"></div>
+        </section>
+        <section class="card">
+          <div class="title">Situa\u00e7\u00e3o dos ciclos</div>
+          <div class="sub">Status atual das janelas M1-M3</div>
+          <div id="cycles"></div>
+        </section>
+        <section class="card wide">
+          <div class="title">Premia\u00e7\u00e3o por vendedor</div>
+          <div class="sub">Total apurado nos filtros atuais</div>
+          <div id="sellers"></div>
+        </section>
       </div>
+
       <script>
       const monthlyData={_js(monthly)};
       const cycleData={_js(cycles)};
       const sellerData={_js(sellers)};
+      const PRIMARY="{primary}";
+      const SECONDARY="{secondary}";
+      const ACCENT="{accent}";
+      const SURFACE="{surface}";
+      const TEXT="{text_color}";
+      const MUTED="{muted}";
+      const BORDER="{border}";
 
       am5.ready(function(){{
         function theme(root){{root.setThemes([am5themes_Animated.new(root)]);}}
+        function styleAxis(renderer){{
+          renderer.labels.template.setAll({{fill:am5.color(TEXT),fontSize:11}});
+          renderer.grid.template.setAll({{stroke:am5.color(BORDER),strokeOpacity:.55}});
+        }}
 
         if(monthlyData.length){{
           const root=am5.Root.new("monthly"); theme(root);
-          const chart=root.container.children.push(am5xy.XYChart.new(root,{{
-            panX:false,panY:false,wheelX:"none",wheelY:"none"
-          }}));
-          const xr=am5xy.AxisRendererX.new(root,{{minGridDistance:45}});
-          xr.labels.template.setAll({{rotation:-35,centerX:am5.p100,centerY:am5.p50,fontSize:11}});
-          const xa=chart.xAxes.push(am5xy.CategoryAxis.new(root,{{
-            categoryField:"period",renderer:xr
-          }})); xa.data.setAll(monthlyData);
-          const ya=chart.yAxes.push(am5xy.ValueAxis.new(root,{{
-            renderer:am5xy.AxisRendererY.new(root,{{}})
-          }}));
-          const yb=chart.yAxes.push(am5xy.ValueAxis.new(root,{{
-            renderer:am5xy.AxisRendererY.new(root,{{opposite:true}})
-          }}));
+          const chart=root.container.children.push(am5xy.XYChart.new(root,{{panX:false,panY:false,wheelX:"none",wheelY:"none"}}));
+
+          const xr=am5xy.AxisRendererX.new(root,{{minGridDistance:45}}); styleAxis(xr);
+          xr.labels.template.setAll({{rotation:-35,centerX:am5.p100,centerY:am5.p50}});
+          const xa=chart.xAxes.push(am5xy.CategoryAxis.new(root,{{categoryField:"period",renderer:xr}}));
+          xa.data.setAll(monthlyData);
+
+          const yr1=am5xy.AxisRendererY.new(root,{{}}); styleAxis(yr1);
+          const ya=chart.yAxes.push(am5xy.ValueAxis.new(root,{{renderer:yr1}}));
+          const yr2=am5xy.AxisRendererY.new(root,{{opposite:true}}); styleAxis(yr2);
+          const yb=chart.yAxes.push(am5xy.ValueAxis.new(root,{{renderer:yr2}}));
+
           const cols=chart.series.push(am5xy.ColumnSeries.new(root,{{
-            name:"Premiação",xAxis:xa,yAxis:ya,categoryXField:"period",
-            valueYField:"reward",tooltip:am5.Tooltip.new(root,{{
-              labelText:"Premiação: R$ {{valueY.formatNumber('#,###.00')}}"
-            }})
+            name:"Reward",xAxis:xa,yAxis:ya,categoryXField:"period",valueYField:"reward",
+            fill:am5.color(PRIMARY),stroke:am5.color(PRIMARY),
+            tooltip:am5.Tooltip.new(root,{{labelText:"R$ {{valueY.formatNumber('#,###.00')}}"}})
           }}));
-          cols.columns.template.setAll({{cornerRadiusTL:5,cornerRadiusTR:5,maxWidth:34}});
+          cols.columns.template.setAll({{fill:am5.color(PRIMARY),stroke:am5.color(PRIMARY),cornerRadiusTL:5,cornerRadiusTR:5,maxWidth:34}});
           cols.data.setAll(monthlyData);
+
           const line=chart.series.push(am5xy.LineSeries.new(root,{{
-            name:"Faturamento",xAxis:xa,yAxis:yb,categoryXField:"period",
-            valueYField:"billing",strokeWidth:3,tooltip:am5.Tooltip.new(root,{{
-              labelText:"Faturamento: R$ {{valueY.formatNumber('#,###.00')}}"
-            }})
+            name:"Billing",xAxis:xa,yAxis:yb,categoryXField:"period",valueYField:"billing",
+            fill:am5.color(SECONDARY),stroke:am5.color(SECONDARY),
+            tooltip:am5.Tooltip.new(root,{{labelText:"R$ {{valueY.formatNumber('#,###.00')}}"}})
           }}));
-          line.strokes.template.setAll({{strokeWidth:3}});
+          line.strokes.template.setAll({{stroke:am5.color(SECONDARY),strokeWidth:3}});
+          line.bullets.push(function(){{
+            return am5.Bullet.new(root,{{sprite:am5.Circle.new(root,{{radius:4,fill:am5.color(ACCENT),stroke:am5.color(SURFACE),strokeWidth:2}})}});
+          }});
           line.data.setAll(monthlyData);
           chart.set("cursor",am5xy.XYCursor.new(root,{{behavior:"none"}}));
           cols.appear(700); line.appear(700); chart.appear(700,80);
@@ -182,49 +229,36 @@ def render_charts(
 
         if(cycleData.length){{
           const root=am5.Root.new("cycles"); theme(root);
-          const chart=root.container.children.push(am5percent.PieChart.new(root,{{
-            innerRadius:am5.percent(60),layout:root.verticalLayout
-          }}));
-          const series=chart.series.push(am5percent.PieSeries.new(root,{{
-            valueField:"value",categoryField:"category",alignLabels:false
-          }}));
-          series.labels.template.setAll({{text:"{{value}}",fontSize:12,fontWeight:"600"}});
+          const chart=root.container.children.push(am5percent.PieChart.new(root,{{innerRadius:am5.percent(60),layout:root.verticalLayout}}));
+          const series=chart.series.push(am5percent.PieSeries.new(root,{{valueField:"value",categoryField:"category",alignLabels:false}}));
+          series.get("colors").set("colors",[
+            am5.color(PRIMARY),am5.color(SECONDARY),am5.color(ACCENT),am5.color(MUTED),am5.color(BORDER)
+          ]);
+          series.labels.template.setAll({{text:"{{value}}",fill:am5.color(TEXT),fontSize:12,fontWeight:"600"}});
           series.ticks.template.set("visible",false);
-          series.slices.template.setAll({{
-            stroke:am5.color(0xffffff),strokeWidth:2,
-            tooltipText:"{{category}}: {{value}}"
-          }});
+          series.slices.template.setAll({{stroke:am5.color(SURFACE),strokeWidth:2,tooltipText:"{{category}}: {{value}}"}});
           series.data.setAll(cycleData);
-          const legend=chart.children.push(am5.Legend.new(root,{{
-            centerX:am5.p50,x:am5.p50,marginTop:8
-          }}));
-          legend.labels.template.setAll({{fontSize:11}});
+          const legend=chart.children.push(am5.Legend.new(root,{{centerX:am5.p50,x:am5.p50,marginTop:8}}));
+          legend.labels.template.setAll({{fill:am5.color(TEXT),fontSize:11}});
+          legend.valueLabels.template.setAll({{fill:am5.color(MUTED),fontSize:11}});
           legend.data.setAll(series.dataItems);
           series.appear(700,80);
         }}
 
         if(sellerData.length){{
           const root=am5.Root.new("sellers"); theme(root);
-          const chart=root.container.children.push(am5xy.XYChart.new(root,{{
-            panX:false,panY:false,wheelX:"none",wheelY:"none"
-          }}));
-          const yr=am5xy.AxisRendererY.new(root,{{inversed:true,minGridDistance:24}});
+          const chart=root.container.children.push(am5xy.XYChart.new(root,{{panX:false,panY:false,wheelX:"none",wheelY:"none"}}));
+          const yr=am5xy.AxisRendererY.new(root,{{inversed:true,minGridDistance:24}}); styleAxis(yr);
           yr.labels.template.setAll({{fontSize:11,maxWidth:220,oversizedBehavior:"truncate"}});
-          const ya=chart.yAxes.push(am5xy.CategoryAxis.new(root,{{
-            categoryField:"seller",renderer:yr
-          }})); ya.data.setAll(sellerData);
-          const xa=chart.xAxes.push(am5xy.ValueAxis.new(root,{{
-            min:0,renderer:am5xy.AxisRendererX.new(root,{{}})
-          }}));
+          const ya=chart.yAxes.push(am5xy.CategoryAxis.new(root,{{categoryField:"seller",renderer:yr}})); ya.data.setAll(sellerData);
+          const xr=am5xy.AxisRendererX.new(root,{{}}); styleAxis(xr);
+          const xa=chart.xAxes.push(am5xy.ValueAxis.new(root,{{min:0,renderer:xr}}));
           const series=chart.series.push(am5xy.ColumnSeries.new(root,{{
             xAxis:xa,yAxis:ya,categoryYField:"seller",valueXField:"value",
-            tooltip:am5.Tooltip.new(root,{{
-              labelText:"{{categoryY}}: R$ {{valueX.formatNumber('#,###.00')}}"
-            }})
+            fill:am5.color(ACCENT),stroke:am5.color(ACCENT),
+            tooltip:am5.Tooltip.new(root,{{labelText:"{{categoryY}}: R$ {{valueX.formatNumber('#,###.00')}}"}})
           }}));
-          series.columns.template.setAll({{
-            height:am5.percent(64),cornerRadiusTR:6,cornerRadiusBR:6
-          }});
+          series.columns.template.setAll({{fill:am5.color(ACCENT),stroke:am5.color(ACCENT),height:am5.percent(64),cornerRadiusTR:6,cornerRadiusBR:6}});
           series.data.setAll(sellerData);
           series.appear(700); chart.appear(700,80);
         }}
@@ -233,8 +267,8 @@ def render_charts(
     </body>
     </html>
     """
-    components.html(source,height=740,scrolling=False)
 
+    components.html(source, height=740, scrolling=False)
 
 
 def get_contracts() -> dict[str, dict]:
