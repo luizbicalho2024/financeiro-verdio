@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import re
 import unicodedata
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Iterable
 
 import streamlit as st
@@ -390,30 +390,78 @@ def parse_period_key(record: dict[str, Any]) -> str | None:
         return None
 
 
+def _parse_contract_date(value: Any) -> date | None:
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+
+    text = str(value or "").strip()
+    if not text:
+        return None
+
+    for candidate in (text, text[:10]):
+        for fmt in ("%Y-%m-%d", "%d/%m/%Y"):
+            try:
+                return datetime.strptime(candidate, fmt).date()
+            except (TypeError, ValueError):
+                pass
+
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).date()
+    except Exception:
+        return None
+
+
+def eligible_billing_periods(
+    contract_start: Any,
+    months: int = 3,
+) -> list[str]:
+    """Competências imediatamente posteriores ao mês do contrato.
+
+    Exemplo: contrato em 20/06/2026 -> 2026-07, 2026-08 e 2026-09.
+    Um mês sem faturamento permanece na janela e não é substituído por M4.
+    """
+    contract_date = _parse_contract_date(contract_start)
+    if contract_date is None:
+        return []
+
+    count = max(0, int(months or 0))
+    periods: list[str] = []
+
+    for offset in range(1, count + 1):
+        absolute_month = (
+            contract_date.year * 12
+            + (contract_date.month - 1)
+            + offset
+        )
+        year = absolute_month // 12
+        month = absolute_month % 12 + 1
+        periods.append(f"{year:04d}-{month:02d}")
+
+    return periods
+
+
 def first_three_billings(
     history: Iterable[dict[str, Any]],
     client_name: str,
-    contract_start: str | None = None,
+    contract_start: Any = None,
 ) -> list[dict[str, Any]]:
+    """Faturamentos existentes somente dentro da janela fixa M1-M3."""
     target = _norm(client_name)
-    start_key = None
-    if contract_start:
-        match = re.match(r"(20\d{2})-(0?[1-9]|1[0-2])", str(contract_start))
-        if match:
-            start_key = f"{int(match.group(1)):04d}-{int(match.group(2)):02d}"
+    eligible = eligible_billing_periods(contract_start, months=3)
+    if not target or not eligible:
+        return []
 
-    candidates: list[tuple[str, dict[str, Any]]] = []
-    seen: set[str] = set()
+    eligible_set = set(eligible)
+    by_period: dict[str, dict[str, Any]] = {}
+
     for record in history:
         if _norm(record.get("cliente")) != target:
             continue
         key = parse_period_key(record)
-        if not key or key in seen:
+        if key not in eligible_set or key in by_period:
             continue
-        if start_key and key < start_key:
-            continue
-        candidates.append((key, record))
-        seen.add(key)
+        by_period[key] = record
 
-    candidates.sort(key=lambda item: item[0])
-    return [record for _, record in candidates[:3]]
+    return [by_period[period] for period in eligible if period in by_period]
