@@ -4,10 +4,15 @@ import os
 import re
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from app_core.ui import apply_branding, render_sidebar
+from app_core.sigyo_api import (
+    SIGYO_BASE_URL,
+    SigyoApiError,
+    get_json as sigyo_get_json,
+    normalize_token,
+)
 
 import streamlit as st
 import pandas as pd
-import requests
 from datetime import datetime, timedelta
 from collections import defaultdict
 import io
@@ -38,23 +43,83 @@ def formatar_moeda_br(valor):
     # Substitui vírgulas temporárias por X, pontos por vírgulas, e X por pontos
     return valor_formatado.replace(",", "X").replace(".", ",").replace("X", ".")
 
-@st.cache_data(ttl=300)
-def buscar_dados_api(token, endpoint):
-    """Função genérica para buscar dados de um endpoint da API."""
-    if not token:
-        st.warning("Por favor, insira o Token de Autenticação.")
-        return None
-    headers = {"Authorization": f"Bearer {token}"}
-    url = f"https://sigyo.uzzipay.com/api/{endpoint}"
+def _secret(name, default=""):
     try:
-        response = requests.get(url, headers=headers, timeout=180)
-        response.raise_for_status()
-        return response.json()
-    except requests.exceptions.HTTPError as err:
-        st.error(f"Erro HTTP {response.status_code}: Token inválido ou API indisponível no endpoint '{endpoint}'.")
+        return st.secrets.get(name, default)
+    except Exception:
+        return default
+
+
+SIGYO_API_URL = str(
+    _secret(
+        "SIGYO_API_BASE_URL",
+        SIGYO_BASE_URL,
+    )
+    or SIGYO_BASE_URL
+).strip().rstrip("/")
+
+
+@st.cache_data(
+    ttl=300,
+    show_spinner=False,
+)
+def _buscar_dados_api_cache(
+    token,
+    endpoint,
+    params_items,
+    base_url,
+):
+    return sigyo_get_json(
+        token,
+        endpoint,
+        params=dict(params_items),
+        base_url=base_url,
+    )
+
+
+def buscar_dados_api(
+    token,
+    endpoint,
+    params=None,
+):
+    token_normalizado = normalize_token(
+        token
+    )
+
+    if not token_normalizado:
+        st.error(
+            "Token SIGYO não informado."
+        )
         return None
-    except requests.exceptions.RequestException as e:
-        st.error(f"Erro de conexão com o endpoint '{endpoint}': {e}")
+
+    try:
+        params_items = tuple(
+            sorted(
+                (params or {}).items()
+            )
+        )
+
+        return _buscar_dados_api_cache(
+            token_normalizado,
+            endpoint,
+            params_items,
+            SIGYO_API_URL,
+        )
+
+    except SigyoApiError as exc:
+        st.error(
+            exc.user_message()
+        )
+
+        if exc.detail:
+            with st.expander(
+                f"Detalhes técnicos — {endpoint}"
+            ):
+                st.code(
+                    exc.detail,
+                    language=None,
+                )
+
         return None
 
 def buscar_transacoes_em_partes(token, data_inicio, data_fim, chunk_days=7):
@@ -69,8 +134,19 @@ def buscar_transacoes_em_partes(token, data_inicio, data_fim, chunk_days=7):
     while current_start <= data_fim:
         current_end = min(current_start + timedelta(days=chunk_days - 1), data_fim)
         
-        endpoint = f"transacoes?TransacaoSearch[data_cadastro]={current_start.strftime('%d/%m/%Y')} - {current_end.strftime('%d/%m/%Y')}"
-        dados = buscar_dados_api(token, endpoint)
+        periodo_sigyo = (
+            f"{current_start.strftime('%d/%m/%Y')} - "
+            f"{current_end.strftime('%d/%m/%Y')}"
+        )
+
+        dados = buscar_dados_api(
+            token,
+            "transacoes",
+            params={
+                "TransacaoSearch[data_cadastro]":
+                    periodo_sigyo
+            },
+        )
 
         if dados is None:
             progress_bar.empty()
@@ -227,7 +303,33 @@ st.markdown("Gere relatórios detalhados para as secretarias vinculadas ao clien
 st.markdown("---")
 
 st.subheader("1. Configurações da Consulta")
-token = st.text_input("🔑 Token de Autenticação da API", type="password", help="Insira seu token Bearer para acessar os dados.")
+token_secret = str(
+    _secret(
+        "SIGYO_API_TOKEN",
+        "",
+    )
+    or ""
+).strip()
+
+token_digitado = st.text_input(
+    "🔑 Token de Autenticação da API SIGYO",
+    type="password",
+    help=(
+        "Aceita o token puro ou no formato Bearer TOKEN. "
+        "Se ficar vazio, será utilizado SIGYO_API_TOKEN "
+        "dos Secrets do Streamlit."
+    ),
+)
+
+token = (
+    token_digitado.strip()
+    or token_secret
+)
+
+if token_secret and not token_digitado.strip():
+    st.caption(
+        "🔐 Token SIGYO carregado dos Secrets."
+    )
 
 col1, col2, col3 = st.columns(3)
 hoje = datetime.now()
@@ -268,16 +370,66 @@ with col_b:
 
 if st.button("🚀 Gerar Relatórios", type="primary"):
     if not token:
-        st.error("O token de autenticação é obrigatório.")
+        st.error(
+            "Informe um token SIGYO ou configure "
+            "SIGYO_API_TOKEN nos Secrets."
+        )
     elif not status_selecionados:
         st.error("Por favor, selecione pelo menos um status de transação para continuar.")
     else:
         with st.spinner("Buscando todos os dados da API... Isso pode levar alguns minutos."):
-            faturas = buscar_dados_api(token, "fatura-recebimentos?expand=cliente,configuracao.faturamentoTipo,grupo")
-            empenhos = buscar_dados_api(token, "empenhos?expand=contrato.empresa,grupo")
-            contratos = buscar_dados_api(token, "contratos")
-            produtos = buscar_dados_api(token, "produtos")
-            transacoes = buscar_transacoes_em_partes(token, data_inicio, data_fim)
+            # APIs oficiais cadastradas no SIGYO.
+
+            faturas = buscar_dados_api(
+                token,
+                "fatura-recebimentos",
+                params={
+                    "expand": (
+                        "cliente,"
+                        "configuracao.faturamentoTipo,"
+                        "grupo.grupo,"
+                        "status"
+                    )
+                },
+            )
+
+            empenhos = buscar_dados_api(
+                token,
+                "empenhos",
+                params={
+                    "expand":
+                        "contrato.empresa,grupo"
+                },
+            )
+
+            contratos = buscar_dados_api(
+                token,
+                "contratos",
+                params={
+                    "expand": (
+                        "empresa,"
+                        "empresa.organizacao,"
+                        "modalidade,"
+                        "modulos_contrato,"
+                        "situacao"
+                    )
+                },
+            )
+
+            produtos = buscar_dados_api(
+                token,
+                "produtos",
+                params={
+                    "expand":
+                        "categoria"
+                },
+            )
+
+            transacoes = buscar_transacoes_em_partes(
+                token,
+                data_inicio,
+                data_fim,
+            )
 
         if all(data is not None for data in [faturas, empenhos, contratos, produtos, transacoes]):
             st.success("Todos os dados foram carregados com sucesso!")
