@@ -271,6 +271,7 @@ def render_charts(
     components.html(source, height=740, scrolling=False)
 
 
+from app_core.commission_auto import sold_units_by_seller, payment_confirmed, activity_confirmed
 from app_core.commission_policy import (
     contract_discount, discount_is_eligible, first_month_percent,
     installation_attainment, money, percent_reward,
@@ -350,11 +351,6 @@ def _key(doc_id: str, client: str, period: str) -> str:
 
 st.title("Premiação de Vendedores — Política Meta 5 Verdio")
 st.caption("Bionio Frotas | Premiação não recorrente (M1) + bônus recorrente por faturamento M1–M3")
-st.info(
-    "**Condições:** contrato B2B com desconto de até 15% sobre a tabela oficial; "
-    "instalações comprovadas para a meta; faturamento emitido, recebido e dispositivos ativos. "
-    "Faturas sem comprovação não são consideradas como valor a pagar."
-)
 
 try:
     pricing = get_simulator_pricing()
@@ -386,77 +382,37 @@ for entry in history:
 
 months_in_history = sorted({period for _, period in history_index})
 now_month = datetime.now(ZoneInfo("America/Porto_Velho")).strftime("%Y-%m")
-install_months = [
-    str(c.get("competencia_instalacao") or "")
-    for c in contracts.values()
-    if len(str(c.get("competencia_instalacao") or "")) == 7
-]
-all_months = sorted(set(months_in_history + install_months + [now_month]), reverse=True)
 
-# Aprovações ficam separadas por competência, evitando um documento único gigantesco.
-month_cache: dict[str, dict] = {}
-approvals_cache: dict[str, dict] = {}
+# Volume de vendas atribuido no cadastro de contratos, somente com
+# faturamento positivo no historico. NAO equivale a instalacoes confirmadas.
+billed_months_by_client: dict[str, set[str]] = {}
+for (client, period), item in history_index.items():
+    if _billed(item) > 0 and period <= now_month:
+        billed_months_by_client.setdefault(client, set()).add(period)
+sales_by_month = sold_units_by_seller(contracts, billed_months_by_client)
+all_months = sorted(set(months_in_history) | set(sales_by_month) | {now_month}, reverse=True)
 
+st.markdown("### 1. Meta comercial automática — vendas atribuídas")
+selected_month = st.selectbox("Competência comercial", all_months, key="meta_period")
+month_sales = sales_by_month.get(selected_month, {})
+active_sellers_count = len(month_sales)
+if not month_sales:
+    st.caption("Não há contratos com unidades vendidas e faturamento registrado nesta competência.")
+else:
+    seller_target = target_for_seller(active_sellers_count)
+    sales_rows = []
+    for seller_name, units in sorted(month_sales.items()):
+        attained = float(installation_attainment(int(units), active_sellers_count))
+        sales_rows.append({
+            "Vendedor": seller_name,
+            "Unidades vendidas (contratos faturados)": int(units),
+            "Meta individual (un.)": float(seller_target),
+            "Atingimento de vendas (%)": round(attained, 2),
+            "Taxa inicial estimada (%)": float(first_month_percent(attained)),
+        })
+    st.caption(f"{active_sellers_count} vendedor(es) com vendas faturadas em {selected_month}. Meta dividida automaticamente: 25 ÷ {active_sellers_count}.")
+    st.dataframe(pd.DataFrame(sales_rows), hide_index=True, use_container_width=True)
 
-def target_data(period: str) -> dict:
-    if period not in month_cache:
-        month_cache[period] = _get_doc("settings", f"commission_attainment_{period}")
-    return month_cache[period]
-
-
-def receipt_data(period: str) -> dict:
-    if period not in approvals_cache:
-        approvals_cache[period] = _get_doc("settings", f"commission_receipts_{period}")
-    return approvals_cache[period]
-
-
-with st.expander("1. Apuração da meta de instalações por vendedor", expanded=True):
-    c1, c2 = st.columns([1, 3])
-    selected_month = c1.selectbox("Competência da meta", all_months, key="meta_period")
-    current_target = target_data(selected_month)
-    active_count = c1.number_input(
-        "Vendedores atuantes no mês", min_value=0, max_value=999,
-        value=int(current_target.get("active_sellers") or 0), step=1,
-        help="Quantidade efetiva publicada para o mês de apuração."
-    )
-    entries = current_target.get("installed_by_seller") or {}
-    editor_source = pd.DataFrame([
-        {"Vendedor": name, "Instalações comprovadas": int(entries.get(name, 0) or 0)}
-        for name in sellers
-    ])
-    with c2:
-        st.caption("Registre as instalações reais do período, e não a quantidade contratada ou faturada.")
-        edited_target = st.data_editor(
-            editor_source, hide_index=True, use_container_width=True, num_rows="fixed",
-            column_config={
-                "Vendedor": st.column_config.TextColumn(disabled=True),
-                "Instalações comprovadas": st.column_config.NumberColumn(min_value=0, step=1, format="%d"),
-            }, key=f"install_editor_{selected_month}",
-        )
-    if active_count > 0:
-        st.metric("Meta individual de dispositivos", f"{float(target_for_seller(int(active_count))):.2f}")
-    else:
-        st.warning("Informe o total de vendedores atuantes; até lá, M1 não poderá gerar premiação.")
-    if st.button("Salvar meta e instalações do mês", type="primary", key="save_attainment"):
-        try:
-            counted = {
-                str(row["Vendedor"]): int(row["Instalações comprovadas"])
-                for _, row in edited_target.iterrows()
-            }
-            if any(qty < 0 for qty in counted.values()):
-                raise ValueError("Instalações não podem ser negativas.")
-            if active_count < 1:
-                raise ValueError("Informe pelo menos um vendedor atuante.")
-            db.collection("settings").document(f"commission_attainment_{selected_month}").set({
-                "active_sellers": int(active_count),
-                "installed_by_seller": counted,
-                "updated_at": datetime.now(ZoneInfo("America/Porto_Velho")).isoformat(),
-            }, merge=True)
-        except Exception as exc:
-            st.error(f"Não foi possível salvar a apuração: {exc}")
-        else:
-            st.success("Meta e instalações gravadas.")
-            st.rerun()
 
 # Os tres meses começam no primeiro faturamento positivo do contrato.
 # Precalcula períodos positivos evitando percorrer todo o historico por contrato.
@@ -488,31 +444,37 @@ for doc_id, contract in contracts.items():
         if period >= signed
     ]
     first_period = client_periods[0] if client_periods else None
-    # A competência de instalação requer registro próprio, nunca inferência da data do contrato.
-    installation_month = str(contract.get("competencia_instalacao") or "").strip()
-    target = target_data(installation_month) if installation_month else {}
-    number_sellers = int(target.get("active_sellers") or 0)
-    installed_by_seller = target.get("installed_by_seller") or {}
-    target_ready = number_sellers > 0 and seller in installed_by_seller
-    count = int(installed_by_seller.get(seller, 0) or 0) if target_ready else 0
+    # Apuracao automatica pelo mes da assinatura e unidades vendidas.
+    # A fonte nao possui eventos de instalacao por dispositivo/vendedor.
+    sale_month = signed
+    month_sales = sales_by_month.get(sale_month, {})
+    number_sellers = len(month_sales)
+    target_ready = number_sellers > 0 and seller in month_sales
+    count = int(month_sales.get(seller, 0)) if target_ready else 0
     attainment = float(installation_attainment(count, number_sellers)) if target_ready else None
     m1_percent = float(first_month_percent(attainment)) if attainment is not None else 0.0
+
 
     row_indices = []
     for idx in range(3):
         period = shift_month(first_period, idx) if first_period else ""
         invoice = history_index.get((_norm(client), period)) if period else None
         billing = money(_billed(invoice))
-        approval_id = _key(doc_id, client, period) if period else ""
-        approvals = receipt_data(period).get("rows", {}) if period else {}
-        confirmation = approvals.get(approval_id, {})
-        receipt_ok = bool(confirmation.get("recebido"))
-        active_ok = bool(confirmation.get("ativo"))
-        contract_ok = bool(confirmation.get("contrato_ativo"))
+        # Historico do faturamento ja seleciona a competencia automaticamente.
+        # Dados de liquidação/atividade só valem se houver campos explícitos.
+        payment = payment_confirmed(invoice, billing)
+        activity = activity_confirmed(invoice)
         expiration = _parse_month(contract.get("vencimento_contrato"))
         in_contract_term = not expiration or period <= expiration
-        final = bool(eligible and invoice and billing > 0 and receipt_ok and active_ok
-                     and contract_ok and in_contract_term and period <= now_month)
+        preliminary = bool(
+            eligible and invoice and billing > 0 and in_contract_term
+            and period <= now_month
+        )
+        # Para a premiacao M1, venda cadastrada ainda nao comprova
+        # instalacao. Exige uma origem operacional explicita se disponivel.
+        installation_proof = contract.get("instalacoes_confirmadas") is True
+        payable = bool(preliminary and payment is True and activity is True
+                       and (idx != 0 or installation_proof))
         if not eligible:
             status = "NÃO ELEGÍVEL — DESCONTO/TABELA"
         elif not first_period:
@@ -523,33 +485,39 @@ for doc_id, contract in contracts.items():
             status = "COMPETÊNCIA FUTURA"
         elif not in_contract_term:
             status = "CONTRATO FORA DA VIGÊNCIA"
-        elif not receipt_ok or not active_ok or not contract_ok:
-            status = "PENDENTE COMPROVAÇÃO"
+        elif payable:
+            status = "LIBERÁVEL — RECEBIMENTO E ATIVIDADE CONFIRMADOS"
+        elif preliminary and payment is True and activity is True and idx == 0:
+            status = "PROJEÇÃO — INSTALAÇÕES NÃO CONFIRMADAS"
         else:
-            status = "APURADA"
+            status = "PROJEÇÃO — AGUARDANDO DADOS DE RECEBIMENTO/ATIVIDADE"
+
+
         row = {
-            "ID": approval_id,
             "Vendedor": seller, "Cliente": client, "Contrato": doc_id,
-            "Data contrato": signed, "Competência instalação": installation_month,
+            "Data contrato": signed, "Competência da venda": sale_month,
             "Fatura": f"M{idx+1}", "Competência": period,
             "Fim da janela": shift_month(first_period, 2) if first_period else "",
             "Desconto (%)": discount, "Referência": discount_reason,
             "Elegível": eligible, "Meta (%)": attainment,
-            "Dispositivos instalados": count if target_ready else None,
-            "Meta comprovada": target_ready,
+            "Unidades vendidas pelo vendedor": count if target_ready else None,
+            "Meta calculada": target_ready,
             "Valor faturado (R$)": billing,
-            "Recebido": receipt_ok, "Dispositivos ativos": active_ok,
-            "Contrato ativo": contract_ok,
-            "Status": status, "Apto a pagar": final,
+            "Pagamento": "CONFIRMADO" if payment is True else ("NÃO RECEBIDO" if payment is False else "SEM INFORMAÇÃO"),
+            "Atividade": "CONFIRMADA" if activity is True else ("INATIVA" if activity is False else "SEM INFORMAÇÃO"),
+            "Contrato vigente": in_contract_term,
+            "Instalação comprovada": installation_proof,
+            "Status": status, "Apuração possível": preliminary, "Apto a pagar": payable,
             "Taxa M1 (%)": m1_percent if target_ready else 0.0,
             "Bônus recorrente (%)": 0.0,
             "Premiação M1 (R$)": 0.0, "Premiação recorrente (R$)": 0.0,
+            "Premiação liberável (R$)": 0.0,
         }
         row_indices.append(len(records))
         records.append(row)
     clients.append({
         "Vendedor": seller, "Cliente": client, "Data contrato": signed,
-        "Instalação": installation_month or "NÃO INFORMADA",
+        "Competência da venda": sale_month,
         "M1": first_period or "PENDENTE",
         "M2": shift_month(first_period, 1) if first_period else "",
         "M3": shift_month(first_period, 2) if first_period else "",
@@ -562,31 +530,35 @@ for doc_id, contract in contracts.items():
         "Premiação M1 (R$)": 0.0,
         "Premiação recorrente (R$)": 0.0,
         "Total apurado (R$)": 0.0,
+        "Total liberável (R$)": 0.0,
         "indices": row_indices,
     })
 
-# A faixa de 2%, 3% ou 4% é calculada sobre o total recebido de cada
-# vendedor na competência, considerando SOMENTE contratos dentro de M1-M3.
+# A faixa recorrente projetada usa apenas valores FATURADOS elegíveis de M1-M3.
+# O status liberavel depende de provas financeiras e operacionais de origem.
 monthly_totals: dict[tuple[str, str], float] = {}
 for row in records:
-    if row["Apto a pagar"]:
+    if row["Apuração possível"]:
         pair = (row["Vendedor"], row["Competência"])
         monthly_totals[pair] = monthly_totals.get(pair, 0.0) + row["Valor faturado (R$)"]
 for row in records:
-    if not row["Apto a pagar"]:
+    if not row["Apuração possível"]:
         continue
     month_total = monthly_totals[(row["Vendedor"], row["Competência"])]
     pct = float(recurring_percent(month_total))
     row["Bônus recorrente (%)"] = pct
     row["Premiação recorrente (R$)"] = percent_reward(row["Valor faturado (R$)"], pct)
-    if row["Fatura"] == "M1" and row["Meta comprovada"]:
+    if row["Fatura"] == "M1" and row["Meta calculada"]:
         row["Premiação M1 (R$)"] = percent_reward(row["Valor faturado (R$)"], row["Taxa M1 (%)"])
+    if row["Apto a pagar"]:
+        row["Premiação liberável (R$)"] = money(row["Premiação M1 (R$)"] + row["Premiação recorrente (R$)"])
 
 for client in clients:
     related = [records[i] for i in client.pop("indices")]
     client["Premiação M1 (R$)"] = money(sum(r["Premiação M1 (R$)"] for r in related))
     client["Premiação recorrente (R$)"] = money(sum(r["Premiação recorrente (R$)"] for r in related))
     client["Total apurado (R$)"] = money(client["Premiação M1 (R$)"] + client["Premiação recorrente (R$)"])
+    client["Total liberável (R$)"] = money(sum(r["Premiação liberável (R$)"] for r in related))
     end = related[-1]["Competência"]
     client["Status ciclo"] = (
         "AGUARDANDO M1" if not end else
@@ -604,53 +576,7 @@ if not records:
 frame = pd.DataFrame(records)
 client_frame = pd.DataFrame(clients)
 
-with st.expander("2. Confirmar recebimento e dispositivos ativos nas faturas", expanded=False):
-    st.caption(
-        "A confirmação deve refletir a conciliação financeira e a situação operacional reais. "
-        "O histórico de faturamento, isoladamente, não comprova pagamento."
-    )
-    choices = sorted({row["Competência"] for row in records if row["Competência"]}, reverse=True)
-    check_month = st.selectbox("Competência a conferir", choices or [now_month], key="receipt_month")
-    current = frame[(frame["Competência"] == check_month) & (frame["Valor faturado (R$)"] > 0)].copy()
-    if current.empty:
-        st.info("Nenhuma fatura positiva nesta competência.")
-    else:
-        columns = ["ID", "Vendedor", "Cliente", "Fatura", "Valor faturado (R$)", "Recebido", "Dispositivos ativos", "Contrato ativo"]
-        edited = st.data_editor(
-            current[columns], hide_index=True, use_container_width=True,
-            num_rows="fixed", key=f"receipt_editor_{check_month}",
-            column_config={
-                "ID": st.column_config.TextColumn(disabled=True),
-                "Vendedor": st.column_config.TextColumn(disabled=True),
-                "Cliente": st.column_config.TextColumn(disabled=True),
-                "Fatura": st.column_config.TextColumn(disabled=True),
-                "Valor faturado (R$)": st.column_config.NumberColumn(format="R$ %.2f", disabled=True),
-                "Recebido": st.column_config.CheckboxColumn(),
-                "Dispositivos ativos": st.column_config.CheckboxColumn(),
-                "Contrato ativo": st.column_config.CheckboxColumn(),
-            }
-        )
-        if st.button("Gravar conferência financeira e operacional", type="primary"):
-            try:
-                approval = receipt_data(check_month)
-                rows = dict(approval.get("rows") or {})
-                for _, item in edited.iterrows():
-                    rows[str(item["ID"])] = {
-                        "recebido": bool(item["Recebido"]),
-                        "ativo": bool(item["Dispositivos ativos"]),
-                        "contrato_ativo": bool(item["Contrato ativo"]),
-                        "conferido_por": str(st.session_state.get("user_info", {}).get("email") or "operador"),
-                        "conferido_em": datetime.now(ZoneInfo("America/Porto_Velho")).isoformat(),
-                    }
-                db.collection("settings").document(f"commission_receipts_{check_month}").set({
-                    "rows": rows,
-                    "updated_at": datetime.now(ZoneInfo("America/Porto_Velho")).isoformat(),
-                }, merge=True)
-            except Exception as exc:
-                st.error(f"Falha ao salvar a conferência: {exc}")
-            else:
-                st.success("Conferência gravada.")
-                st.rerun()
+
 
 st.markdown("### Apuração e indicadores")
 a, b, c, d = st.columns(4)
@@ -676,33 +602,35 @@ visible_clients = client_frame[[
 ]].copy()
 if chosen_year != "Todos" or chosen_month != "Todos":
     results = view.groupby(["Vendedor", "Cliente"], as_index=False)[
-        ["Premiação M1 (R$)", "Premiação recorrente (R$)"]
-    ].sum()
+        ["Premiação M1 (R$)", "Premiação recorrente (R$)", "Premiação liberável (R$)"]
+    ].sum().rename(columns={"Premiação liberável (R$)": "Total liberável (R$)"})
     if not visible_clients.empty:
-        visible_clients = visible_clients.drop(columns=["Premiação M1 (R$)", "Premiação recorrente (R$)", "Total apurado (R$)"])
+        visible_clients = visible_clients.drop(columns=["Premiação M1 (R$)", "Premiação recorrente (R$)", "Total apurado (R$)", "Total liberável (R$)"])
         visible_clients = visible_clients.merge(results, on=["Vendedor", "Cliente"], how="left")
         visible_clients["Total apurado (R$)"] = visible_clients["Premiação M1 (R$)"] + visible_clients["Premiação recorrente (R$)"]
 
 total_first = money(view["Premiação M1 (R$)"].sum())
 total_recurring = money(view["Premiação recorrente (R$)"].sum())
 total_billed = money(view["Valor faturado (R$)"].sum())
-pending = int(view["Status"].eq("PENDENTE COMPROVAÇÃO").sum())
+pending = int(view["Status"].str.startswith("PROJEÇÃO").sum())
+releasable = money(view["Premiação liberável (R$)"].sum())
 render_kpis([
-    {"label": "Total elegível apurado", "value": _brl(total_first+total_recurring), "detail": "M1 + bônus recebido M1–M3", "accent": "#2563eb"},
+    {"label": "Comissão prevista", "value": _brl(total_first+total_recurring), "detail": "M1 + recorrência sobre faturamento", "accent": "#2563eb"},
     {"label": "Premiação não recorrente", "value": _brl(total_first), "detail": "10%, 15% ou 20% de M1", "accent": "#0f766e"},
     {"label": "Bônus recorrente", "value": _brl(total_recurring), "detail": "Faixa 0% / 2% / 3% / 4%", "accent": "#7c3aed"},
     {"label": "Faturamento exibido", "value": _brl(total_billed), "detail": "Inclui pendências", "accent": "#475569"},
-    {"label": "Pendências de comprovação", "value": str(pending), "detail": "Sem liberação para pagar", "accent": "#dc2626"},
+    {"label": "Liberável com evidências", "value": _brl(releasable), "detail": f"{pending} competência(s) ainda projetadas", "accent": "#dc2626"},
 ])
 
 st.markdown("### Consolidado por vendedor")
 if view.empty:
-    grouped = pd.DataFrame(columns=["Vendedor", "Faturamento (R$)", "Premiação M1 (R$)", "Premiação recorrente (R$)", "Total apurado (R$)"])
+    grouped = pd.DataFrame(columns=["Vendedor", "Faturamento (R$)", "Premiação M1 (R$)", "Premiação recorrente (R$)", "Total apurado (R$)", "Total liberável (R$)"])
 else:
     grouped = view.groupby("Vendedor", as_index=False).agg({
-        "Valor faturado (R$)": "sum", "Premiação M1 (R$)": "sum", "Premiação recorrente (R$)": "sum",
+        "Valor faturado (R$)": "sum", "Premiação M1 (R$)": "sum", "Premiação recorrente (R$)": "sum", "Premiação liberável (R$)": "sum",
     }).rename(columns={"Valor faturado (R$)": "Faturamento (R$)"})
     grouped["Total apurado (R$)"] = grouped["Premiação M1 (R$)"] + grouped["Premiação recorrente (R$)"]
+    grouped = grouped.rename(columns={"Premiação liberável (R$)": "Total liberável (R$)"})
 st.dataframe(grouped, hide_index=True, use_container_width=True)
 
 monthly = {}
@@ -722,21 +650,21 @@ first_tab, client_tab, recurring_tab, checks_tab = st.tabs([
     "Etapa 1 — Premiação M1", "Consolidado por cliente", "Etapa 2 — Recorrência M1–M3", "Pendências e auditoria"
 ])
 with first_tab:
-    st.dataframe(view[view["Fatura"] == "M1"].drop(columns=["ID", "Contrato"], errors="ignore"), hide_index=True, use_container_width=True)
+    st.dataframe(view[view["Fatura"] == "M1"].drop(columns=["Contrato"], errors="ignore"), hide_index=True, use_container_width=True)
 with client_tab:
     st.dataframe(visible_clients, hide_index=True, use_container_width=True)
 with recurring_tab:
-    st.dataframe(view.drop(columns=["ID", "Contrato"], errors="ignore"), hide_index=True, use_container_width=True)
+    st.dataframe(view.drop(columns=["Contrato"], errors="ignore"), hide_index=True, use_container_width=True)
 with checks_tab:
     problem = view[view["Status"] != "APURADA"]
-    st.dataframe(problem.drop(columns=["ID", "Contrato"], errors="ignore"), hide_index=True, use_container_width=True)
-    st.warning("O sistema não faz liquidação ou pagamento automático de comissão. Os valores são apurações, não comprovantes de repasse.")
+    st.dataframe(problem.drop(columns=["Contrato"], errors="ignore"), hide_index=True, use_container_width=True)
+    st.caption("Comissão prevista não é comprovante de pagamento. Apenas competências com dados explícitos de recebimento e atividade ficam liberáveis.")
 
 output = io.BytesIO()
 with pd.ExcelWriter(output, engine="openpyxl") as writer:
     grouped.to_excel(writer, index=False, sheet_name="Por Vendedor")
     visible_clients.to_excel(writer, index=False, sheet_name="Por Cliente")
-    view.drop(columns=["ID", "Contrato"], errors="ignore").to_excel(writer, index=False, sheet_name="Faturas M1-M3")
+    view.drop(columns=["Contrato"], errors="ignore").to_excel(writer, index=False, sheet_name="Faturas M1-M3")
 st.download_button(
     "Baixar apuração em Excel", data=output.getvalue(),
     file_name="comissoes_meta5_verdio.xlsx",
