@@ -18,7 +18,9 @@ class TestCommissionV4(unittest.TestCase):
                 "quantidades_produtos":{"Rastreador": n if n<5 else 5},
             }
         self.history=[{"cliente":"Cliente 5","period_key":f"2026-{m:02d}","valor_total":3000}
-                      for m in (1,2,3,4,5)]
+                      for m in (1,2,3,4,5)] + [
+                      {"cliente":f"Cliente {n}","period_key":"2026-01","valor_total":100}
+                      for n in (1,2,3,4)]
 
     def ledger(self,now="2026-04"):
         return build_ledger(self.contracts,self.history,{},now_month=now,
@@ -26,7 +28,7 @@ class TestCommissionV4(unittest.TestCase):
             contract_values=lambda c,p:(c["precos_produtos"],c["quantidades_produtos"]),
             item_reader=lambda r:[])
 
-    def test_target_divisor_five_sellers_even_without_sales(self):
+    def test_target_divisor_five_sellers_with_sales(self):
         data=self.ledger()
         self.assertEqual(len(data['roster']['2026-01']),5)
         self.assertEqual(data['rows'][0]['Meta individual (un.)'],5.0)

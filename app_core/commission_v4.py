@@ -138,6 +138,7 @@ def build_ledger(
     parse_billing_period: Callable[[dict],str | None],
     contract_values: Callable[[dict,dict],tuple[dict,dict]],
     item_reader: Callable[[dict],list[dict]],
+    blocked_sellers: set[str] | None = None,
 ) -> dict[str,Any]:
     """Retorna apuração somente de M1, M2 e M3 e as projeções de pagamento.
 
@@ -162,7 +163,12 @@ def build_ledger(
     for months in positive.values():months.sort()
     sales_by_month = sold_units_by_seller(contracts,billed_periods)
     possible_months = sorted(set(sales_by_month)|set(p for _,p in history_index)|{now_month},reverse=True)
-    roster = {p:eligible_roster(contracts,p) for p in possible_months}
+    # O divisor considera SOMENTE vendedores que venderam naquele mês.
+    # Contas desativadas na identidade compartilhada não entram no divisor.
+    excluded = {norm(name) for name in (blocked_sellers or set())}
+    roster = {p: sorted((seller for seller,quantity in sales_by_month.get(p,{}).items()
+                         if quantity > 0 and norm(seller) not in excluded),key=str.casefold)
+              for p in possible_months}
 
     rows: list[dict] = []
     clients: list[dict] = []
@@ -178,10 +184,10 @@ def build_ledger(
         available = [p for p in positive.get(norm(client),[]) if p>=signed]
         first=available[0] if available else ''
         last=shift_month(first,2) if first else ''
-        sellers=roster.get(signed) or eligible_roster(contracts,signed)
+        sellers=roster.get(signed,[])
         seller_count=len(sellers)
         monthly_sales=sales_by_month.get(signed,{})
-        units=int(monthly_sales.get(seller,0))
+        units=int(monthly_sales.get(seller,0)) if norm(seller) not in excluded else 0
         attainment=float(installation_attainment(units,seller_count)) if seller_count>0 else 0.0
         target_pct=float(first_month_percent(attainment))
         contract_rows=[]
