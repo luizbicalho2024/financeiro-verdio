@@ -638,6 +638,7 @@ def render_sidebar() -> None:
             st.sidebar.caption("Gestão")
             st.sidebar.page_link("pages/7_Contratos_Clientes.py", label="Contratos e preços")
             st.sidebar.page_link("pages/8_Comissao_Vendedores.py", label="Comissões")
+            st.sidebar.page_link("pages/9_Controle_Pagamentos_Comissoes.py", label="Pagamentos de comissões")
             st.sidebar.page_link("pages/94_Gestao_Estoque.py", label="Estoque e tabelas")
             st.sidebar.page_link("pages/2_Gerenciar_Usuarios.py", label="Usuários")
             st.sidebar.page_link("pages/90_Identidade_Visual.py", label="Identidade visual")
