@@ -325,12 +325,6 @@ with tab_edit:
                     f"**Vencimento**\n\n{expiration.strftime('%d/%m/%Y')}"
                 )
 
-            install_month = st.text_input(
-                "Competência de instalação comprovada (AAAA-MM)",
-                value=str(current.get("competencia_instalacao") or signature_date.strftime("%Y-%m")),
-                help="Informe o mês real das instalações atribuídas ao vendedor. A quantidade é apurada na página de comissão.",
-            )
-
             st.markdown("### Produtos, preços e quantidades contratadas")
             st.caption(
                 "Informe a quantidade efetivamente contratada. A margem do contrato "
@@ -376,8 +370,6 @@ with tab_edit:
                 st.error("O nome do cliente é obrigatório.")
             elif not seller_name.strip():
                 st.error("Informe o vendedor responsável pelo contrato.")
-            elif not __import__("re").fullmatch(r"\d{4}-(0[1-9]|1[0-2])", install_month.strip()):
-                st.error("Informe a competência de instalação no formato AAAA-MM.")
             else:
                 product_prices = {
                     str(row["Produto"]): float(
@@ -431,7 +423,9 @@ with tab_edit:
                 payload = {
                     "cliente": client_name.strip(),
                     "vendedor": seller_name.strip(),
-                    "competencia_instalacao": install_month.strip(),
+                    # Preserva informacao legada, mas nao a usa na meta de vendas.
+                    **({"competencia_instalacao": current["competencia_instalacao"]}
+                      if current.get("competencia_instalacao") else {}),
                     "desconto_contrato_percentual": discount,
                     "desconto_apuracao_completa": discount is not None,
                     "ultima_atualizacao_termo": signature_date.strftime(
