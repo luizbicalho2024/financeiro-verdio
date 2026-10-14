@@ -16,6 +16,8 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from app_core.ui import apply_branding, render_sidebar
 from app_core.commission_v4 import build_ledger, due_items, period_label
+from app_core.shared_identity import get_all_shared_users
+from app_core.client_identity import blocked_contract_sellers
 from app_core.commission_policy import money
 from app_core.simulator_pricing import contract_product_values, get_simulator_pricing, parse_period_key
 from mongo_config import db
@@ -101,9 +103,11 @@ try:
     pricing=get_simulator_pricing()
     contracts={d.id:d.to_dict() for d in db.collection("client_contracts").stream()}
     history=umdb.get_billing_history(limit=20000)
+    blocked_sellers=blocked_contract_sellers(contracts,get_all_shared_users())
     now_month=datetime.now(ZoneInfo("America/Porto_Velho")).strftime("%Y-%m")
     ledger=build_ledger(contracts,history,pricing,now_month=now_month,
-        parse_billing_period=parse_period_key,contract_values=contract_product_values,item_reader=_item_reader)
+        parse_billing_period=parse_period_key,contract_values=contract_product_values,item_reader=_item_reader,
+        blocked_sellers=blocked_sellers)
     entries=due_items(ledger["rows"])
     saved={d.id:d.to_dict() for d in db.collection("commission_payments").stream()}
 except Exception as exc:

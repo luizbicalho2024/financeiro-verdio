@@ -26,6 +26,7 @@ from app_core.simulator_pricing import (
 )
 from app_core.commission_policy import contract_discount, discount_is_eligible
 from app_core.ui import apply_branding, render_sidebar
+from app_core.client_identity import fmt_document, valid_document, document_from_record
 from mongo_config import db
 
 st.set_page_config(
@@ -319,6 +320,11 @@ with tab_edit:
                     ),
                 )
 
+            client_tax_id = st.text_input(
+                "CPF/CNPJ do cliente",
+                value=document_from_record(current),
+                help="Usado nas exportações de comissões e faturamento. Se desconhecido, deixe em branco.",
+            )
             expiration = add_months(signature_date, contract_months)
             with expiration_col:
                 st.info(
@@ -370,6 +376,8 @@ with tab_edit:
                 st.error("O nome do cliente é obrigatório.")
             elif not seller_name.strip():
                 st.error("Informe o vendedor responsável pelo contrato.")
+            elif client_tax_id.strip() and not valid_document(client_tax_id):
+                st.error("CPF/CNPJ inválido. Confira os dígitos e informe o documento completo.")
             else:
                 product_prices = {
                     str(row["Produto"]): float(
@@ -422,6 +430,7 @@ with tab_edit:
 
                 payload = {
                     "cliente": client_name.strip(),
+                    "cpf_cnpj": fmt_document(client_tax_id),
                     "vendedor": seller_name.strip(),
                     # Preserva informacao legada, mas nao a usa na meta de vendas.
                     **({"competencia_instalacao": current["competencia_instalacao"]}

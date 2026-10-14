@@ -275,6 +275,8 @@ from app_core.commission_v4 import (
     build_ledger, period_label, commercial_totals, band, due_items,
     eligible_roster, unit_target,
 )
+from app_core.shared_identity import get_all_shared_users
+from app_core.client_identity import blocked_contract_sellers, documents_by_client, document_for_client, norm as identity_norm
 from app_core.commission_policy import first_month_percent, installation_attainment, money
 from app_core.simulator_pricing import contract_product_values, get_simulator_pricing, parse_period_key
 
@@ -292,12 +294,12 @@ def _brl(value: float) -> str:
     return "R$ " + number.replace(",", "_").replace(".", ",").replace("_", ".")
 
 
-st.title("Premiação de Vendedores — Verdio | Meta 5")
-st.caption("Apuração automática por vendas atribuídas, comissões M1–M3 e faixas Prata, Ouro e Diamante")
+st.title("Premiação de Vendedores")
 try:
     pricing = get_simulator_pricing()
     contracts = {d.id:d.to_dict() for d in db.collection("client_contracts").stream()}
     history = umdb.get_billing_history(limit=20000)
+    shared_users = get_all_shared_users()
 except Exception as exc:
     st.error(f"Falha ao consultar contratos e faturamento: {exc}")
     st.stop()
@@ -305,12 +307,15 @@ if not contracts:
     st.warning("Nenhum contrato cadastrado.")
     st.stop()
 
+blocked_sellers = blocked_contract_sellers(contracts,shared_users)
+client_documents = documents_by_client(contracts)
 now_month = datetime.now(ZoneInfo("America/Porto_Velho")).strftime("%Y-%m")
 try:
     ledger = build_ledger(
         contracts, history, pricing, now_month=now_month,
         parse_billing_period=parse_period_key,
         contract_values=contract_product_values, item_reader=_read_items,
+        blocked_sellers=blocked_sellers,
     )
 except Exception as exc:
     st.error(f"Não foi possível apurar as comissões: {exc}")
@@ -319,16 +324,12 @@ except Exception as exc:
 st.markdown("### Meta comercial e faixas dos vendedores")
 months = ledger["months"]
 selected_month = st.selectbox("Competência das vendas", months, format_func=period_label, key="meta5_month_v4")
-roster = ledger["roster"].get(selected_month) or eligible_roster(contracts,selected_month)
+roster = ledger["roster"].get(selected_month,[])
 active_count = len(roster)
 month_sales = ledger["sales"].get(selected_month,{})
 monthly_contract_sales = commercial_totals(contracts, selected_month)
 if active_count:
-    st.caption(
-        f"Meta corporativa: 25 unidades / {active_count} vendedor(es) com carteira contratual vigente = "
-        f"{unit_target(active_count):.2f} unidade(s) por vendedor. "
-        "O divisor inclui vendedores sem venda no mês."
-    )
+    st.caption(f"Meta individual: 25 ÷ {active_count} vendedor(es) com vendas = {unit_target(active_count):.2f} unidades.")
     performance=[]
     for seller in roster:
         units = int(month_sales.get(seller,0))
@@ -346,7 +347,7 @@ if active_count:
     st.dataframe(pd.DataFrame(performance),hide_index=True,use_container_width=True,
         column_config={"Contratos vendidos no mês (R$)":st.column_config.NumberColumn(format="R$ %.2f")})
 else:
-    st.warning("Nenhum vendedor com carteira contratual vigente nesta competência. Não é possível definir o divisor da meta.")
+    st.warning("Nenhum vendedor ativo com venda faturada nesta competência.")
 st.caption("Faixa comercial: soma mensal negociada dos contratos elegíveis assinados no período, por vendedor. O bônus recorrente continua calculado pelo faturamento mensal M1–M3, sem somar M4 ou posteriores. Vendas não comprovam instalações.")
 
 st.markdown("### Comissões por ciclo de premiação")
@@ -368,11 +369,14 @@ view = frame[[
     for _,r in frame.iterrows()
 ]].copy()
 a,b,c,d = st.columns(4)
-seller_choice = a.selectbox("Vendedor",["Todos"]+sorted(client_frame["Vendedor"].dropna().unique().tolist()),key="commission_v4_seller")
+active_choices = sorted({name for name in client_frame["Vendedor"].dropna().unique().tolist()
+                         if identity_norm(name) not in blocked_sellers},key=str.casefold)
+seller_choice = a.selectbox("Vendedor",["Todos"]+active_choices,key="commission_v4_seller")
 client_choice = b.selectbox("Cliente",["Todos"]+sorted(client_frame["Cliente"].dropna().unique().tolist()),key="commission_v4_client")
 years = sorted({int(p[:4]) for p in frame["Competência"] if p},reverse=True)
 year_choice = c.selectbox("Ano",["Todos"]+years,key="commission_v4_year")
 month_choice = d.selectbox("Mês",["Todos"]+list(range(1,13)),format_func=lambda v:"Todos" if v=="Todos" else f"{v:02d}",key="commission_v4_filter_month")
+view=view[~view["Vendedor"].map(lambda seller: identity_norm(seller) in blocked_sellers)].copy()
 if seller_choice!="Todos": view=view[view["Vendedor"]==seller_choice]
 if client_choice!="Todos": view=view[view["Cliente"]==client_choice]
 if year_choice!="Todos":view=view[view["Competência"].str.startswith(f"{year_choice}-")]
@@ -480,9 +484,25 @@ with t4:
     st.dataframe(view[view["Status"].str.contains("PENDENTE|SEM FATURAMENTO|INELEGÍVEL|FORA",case=False,na=False)],hide_index=True,use_container_width=True)
     st.caption("Histórico encerrado permanece consultável. Registrar pagamento de comissão é diferente de confirmar o recebimento da fatura.")
 
+# Acrescenta documento sem inserir valores artificiais: a origem é client_contracts.
+# O consolidado por cliente inclui CPF/CNPJ, preservado como TEXTO no Excel.
+if not visible_clients.empty:
+    visible_clients = visible_clients.copy()
+    visible_clients.insert(2,"CPF/CNPJ",visible_clients["Cliente"].map(
+        lambda client: document_for_client(client,client_documents)))
+if not view.empty:
+    view = view.copy()
+    view.insert(2,"CPF/CNPJ",view["Cliente"].map(
+        lambda client: document_for_client(client,client_documents)))
 output=io.BytesIO()
 with pd.ExcelWriter(output,engine="openpyxl") as writer:
     grouped.to_excel(writer,index=False,sheet_name="Por vendedor")
     visible_clients.to_excel(writer,index=False,sheet_name="Por cliente")
     view.to_excel(writer,index=False,sheet_name="M1-M3")
+    for worksheet in writer.book.worksheets:
+        for cell in worksheet[1]:
+            if cell.value=="CPF/CNPJ":
+                col=cell.column
+                for row in worksheet.iter_rows(min_row=2,min_col=col,max_col=col):
+                    row[0].number_format="@"
 st.download_button("Baixar apuração em Excel",data=output.getvalue(),file_name="comissoes_meta5_v4.xlsx",mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",use_container_width=True)

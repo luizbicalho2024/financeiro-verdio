@@ -13,6 +13,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from app_core.ui import apply_branding, render_sidebar
 from app_core.spreadsheet_reader import read_raw_spreadsheet
 from app_core.inventory_import import SUPPORTED_TYPES
+from app_core.client_identity import documents_by_client, document_for_client, fmt_document, norm as client_norm
 
 import streamlit as st
 import pandas as pd
@@ -54,6 +55,8 @@ COLUMN_ALIASES = {
     "terminal": "Terminal",
     "placa": "Placa",
     "modelo": "Modelo",
+    "cpf": "CPF/CNPJ", "cnpj": "CPF/CNPJ", "cpf/cnpj": "CPF/CNPJ",
+    "cpf / cnpj": "CPF/CNPJ", "documento": "CPF/CNPJ",
 }
 
 
@@ -397,6 +400,8 @@ def _format_excel_sheet(ws):
                     cell.number_format = 'R$ #,##0.00'
                 if header and "Data" in str(header):
                     cell.number_format = 'DD/MM/YYYY'
+                if header == "CPF/CNPJ":
+                    cell.number_format = '@'
     for col_idx, column_cells in enumerate(ws.columns, start=1):
         max_len = 0
         for cell in column_cells:
@@ -411,7 +416,7 @@ def _clean_export_df(df: pd.DataFrame) -> pd.DataFrame:
         if col in df.columns:
             df = df.drop(columns=[col])
     preferred = [
-        "Cliente", "Terminal", "Nº Equipamento", "Placa", "Modelo", "Tipo", "Condição", "Categoria",
+        "Cliente", "CPF/CNPJ", "Terminal", "Nº Equipamento", "Placa", "Modelo", "Tipo", "Condição", "Categoria",
         "Data Ativação", "Data Desativação", "Dias Ativos Mês", "Dias Ativos Calculado",
         "Suspenso Dias Mes", "Dias a Faturar", "Valor Unitario", "Origem Preço", "Valor a Faturar",
     ]
@@ -651,7 +656,28 @@ def processar_planilha_lote(
         return None, None, [], f"Ocorreu um erro ao processar o lote: {e}"
 
 
-def generate_master_excel(df_aprovado):
+def generate_master_excel(df_aprovado, contracts=None):
+    """Adiciona CPF/CNPJ à aba resumo e à aba terminal, sem inferir números ausentes."""
+    contracts = contracts if contracts is not None else {
+        doc.id: doc.to_dict() for doc in db.collection("client_contracts").stream()
+    }
+    index = documents_by_client(contracts)
+    df_aprovado = df_aprovado.copy()
+    input_column = next((col for col in ("CPF/CNPJ", "CPF", "CNPJ", "Documento")
+                         if col in df_aprovado.columns), None)
+    source_docs = {}
+    if input_column:
+        for client, raw in zip(df_aprovado["Cliente"], df_aprovado[input_column]):
+            document = fmt_document(raw)
+            if document:
+                source_docs.setdefault(client_norm(client), set()).add(document)
+    def resolve(client):
+        official = document_for_client(client,index)
+        if official:
+            return official
+        options = source_docs.get(client_norm(client),set())
+        return next(iter(options)) if len(options)==1 else ""
+    df_aprovado["CPF/CNPJ"] = df_aprovado["Cliente"].map(resolve)
     resumo_data = []
     for cliente, df_cliente in df_aprovado.groupby("Cliente"):
         detalhes_modelos = []
@@ -662,6 +688,7 @@ def generate_master_excel(df_aprovado):
         totais = build_totals(df_cliente)
         resumo_data.append({
             "Cliente": cliente,
+            "CPF/CNPJ": resolve(cliente),
             "Detalhes Contratos (Modelos)": " | ".join(detalhes_modelos),
             "Qtd Terminais Faturados": len(df_cliente),
             "Qtd Cheio": totais["terminais_cheio"],
@@ -1452,7 +1479,11 @@ if uploaded_files:
                 "billing_export_cache",
                 {},
             )
-            approved_signature = _frame_signature(df_approved)
+            # O identificador deve invalidar também quando CPF/CNPJ é atualizado no cadastro.
+            export_contracts = {doc.id: doc.to_dict() for doc in db.collection("client_contracts").stream()}
+            document_index = documents_by_client(export_contracts)
+            doc_hash = hashlib.sha256(repr(sorted(document_index.items())).encode("utf-8")).hexdigest()
+            approved_signature = _frame_signature(df_approved) + ":" + doc_hash
             export_key = f"{batch_signature}:{periodo}"
             prepared_export = export_cache.get(export_key)
 
@@ -1473,7 +1504,7 @@ if uploaded_files:
                 ):
                     prepared_export = {
                         "signature": approved_signature,
-                        "excel": generate_master_excel(df_approved),
+                        "excel": generate_master_excel(df_approved, export_contracts),
                         "pdf_zip": create_zip_of_pdfs(
                             df_approved,
                             periodo,
