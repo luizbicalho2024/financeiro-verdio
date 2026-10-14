@@ -24,6 +24,7 @@ from app_core.simulator_pricing import (
     select_plan_name,
     sorted_plan_names,
 )
+from app_core.commission_policy import contract_discount, discount_is_eligible
 from app_core.ui import apply_branding, render_sidebar
 from mongo_config import db
 
@@ -98,7 +99,7 @@ def _plan_months(plan_name: str) -> int:
 st.title("COMERCIAL - Gestão de Contratos Verdio")
 st.markdown(
     "O contrato agora concentra o **vendedor**, o **mix contratado**, os preços negociados "
-    "e a margem usada na política de premiação."
+    "e o desconto em relação à tabela oficial, usado na política de premiação."
 )
 
 try:
@@ -140,15 +141,14 @@ with tab_list:
             status = "Vigente" if expiration >= today else "Vencido"
             margin = contract.get("margem_contrato_percentual")
             costs_complete = bool(contract.get("custos_completos", margin is not None))
-            eligible = (
-                costs_complete
-                and margin is not None
-                and float(margin) >= CONTRACT_MARGIN_FLOOR_PERCENT
-            )
-
             product_prices, product_quantities = contract_product_values(
                 contract, pricing
             )
+            discount, _ = contract_discount(
+                product_prices, product_quantities,
+                contract.get("precos_tabela_produtos") or {},
+            )
+            eligible = discount_is_eligible(discount)
             configured = [
                 f"{product}: {product_quantities.get(product, 0)} un. × R$ {price:.2f}"
                 for product, price in product_prices.items()
@@ -171,10 +171,9 @@ with tab_list:
                     "Vencimento": expiration.strftime("%d/%m/%Y"),
                     "Status": status,
                     "Margem (%)": float(margin) if margin is not None else None,
-                    "Premiação contrato": (
-                        "Elegível"
-                        if eligible
-                        else "Não elegível / margem pendente"
+                    "Desconto contratual (%)": discount,
+                    "Premiação Meta 5": (
+                        "Elegível" if eligible else "Não elegível / desconto ou tabela pendente"
                     ),
                     "Mix contratado": " | ".join(configured) or "Não informado",
                 }
@@ -326,6 +325,12 @@ with tab_edit:
                     f"**Vencimento**\n\n{expiration.strftime('%d/%m/%Y')}"
                 )
 
+            install_month = st.text_input(
+                "Competência de instalação comprovada (AAAA-MM)",
+                value=str(current.get("competencia_instalacao") or signature_date.strftime("%Y-%m")),
+                help="Informe o mês real das instalações atribuídas ao vendedor. A quantidade é apurada na página de comissão.",
+            )
+
             st.markdown("### Produtos, preços e quantidades contratadas")
             st.caption(
                 "Informe a quantidade efetivamente contratada. A margem do contrato "
@@ -371,6 +376,8 @@ with tab_edit:
                 st.error("O nome do cliente é obrigatório.")
             elif not seller_name.strip():
                 st.error("Informe o vendedor responsável pelo contrato.")
+            elif not __import__("re").fullmatch(r"\d{4}-(0[1-9]|1[0-2])", install_month.strip()):
+                st.error("Informe a competência de instalação no formato AAAA-MM.")
             else:
                 product_prices = {
                     str(row["Produto"]): float(
@@ -404,11 +411,8 @@ with tab_edit:
                 )
                 margin = margin_result["margin_percent"]
                 costs_complete = bool(margin_result["costs_complete"])
-                eligible = (
-                    costs_complete
-                    and margin is not None
-                    and float(margin) >= CONTRACT_MARGIN_FLOOR_PERCENT
-                )
+                # A margem continua armazenada para análise de rentabilidade,
+                # mas NÃO determina a elegibilidade de comissão na política Meta 5.
 
                 table_snapshot = {}
                 cost_snapshot = {}
@@ -419,9 +423,17 @@ with tab_edit:
                     table_snapshot[product] = base_price
                     cost_snapshot[product] = base_cost
 
+                discount, _ = contract_discount(
+                    product_prices, product_quantities, table_snapshot,
+                )
+                eligible = discount_is_eligible(discount)
+
                 payload = {
                     "cliente": client_name.strip(),
                     "vendedor": seller_name.strip(),
+                    "competencia_instalacao": install_month.strip(),
+                    "desconto_contrato_percentual": discount,
+                    "desconto_apuracao_completa": discount is not None,
                     "ultima_atualizacao_termo": signature_date.strftime(
                         "%Y-%m-%d"
                     ),
@@ -455,20 +467,10 @@ with tab_edit:
                 }
 
                 if save_contract(client_name.strip(), payload):
-                    if not costs_complete:
-                        st.warning(
-                            "Contrato salvo, mas existem custos zerados no Simulador. "
-                            "A etapa de premiação do contrato ficará inelegível até a margem poder ser comprovada."
-                        )
+                    if discount is None:
+                        st.warning("Contrato salvo, mas o preço de tabela está incompleto. Comissão bloqueada até a correção.")
                     elif eligible:
-                        st.success(
-                            f"Contrato salvo. Margem calculada: {margin:.2f}% — "
-                            "elegível para a etapa de premiação do contrato."
-                        )
+                        st.success(f"Contrato salvo. Desconto calculado: {discount:.2f}% — elegível para a política Meta 5.")
                     else:
-                        st.warning(
-                            f"Contrato salvo. Margem calculada: {margin:.2f}% — "
-                            f"abaixo do piso de {CONTRACT_MARGIN_FLOOR_PERCENT:.0f}% e, portanto, "
-                            "não elegível para a etapa de premiação do contrato."
-                        )
+                        st.warning(f"Contrato salvo. Desconto calculado: {discount:.2f}% — acima do limite de 15%. Não elegível.")
                     st.rerun()
