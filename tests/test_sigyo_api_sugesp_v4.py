@@ -24,11 +24,14 @@ def fake_response(status=200, text="[]", payload=None, headers=None):
 
 
 class SigyoApiSugespV4Tests(unittest.TestCase):
-    def test_default_headers_are_native_python(self):
+    def test_default_headers_match_validated_local_client(self):
+        # V5 replica intencionalmente os headers do teste.py que funcionou no Windows.
         headers = _build_headers("https://sigyo.uzzipay.com/api")
-        self.assertEqual(headers["User-Agent"], requests.utils.default_user_agent())
+        self.assertEqual(headers["User-Agent"], "SIGYO-API-Client/1.0")
         self.assertEqual(headers["Accept"], "application/json")
-        for key in ("Content-Type", "Referer", "Origin", "X-Requested-With", "Cookie"):
+        self.assertEqual(headers["Content-Type"], "application/json")
+        self.assertEqual(headers["Cache-Control"], "no-cache")
+        for key in ("Referer", "Origin", "X-Requested-With", "Cookie", "Authorization", "Host"):
             self.assertNotIn(key, headers)
 
     def test_header_overrides_do_not_change_authorization(self):
