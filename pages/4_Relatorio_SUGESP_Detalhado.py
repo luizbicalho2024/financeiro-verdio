@@ -317,32 +317,52 @@ if st.button("Testar conexao SIGYO", key="sugesp_testar_api"):
     if not token:
         st.error("Configure SIGYO_API_TOKEN nos Secrets do Streamlit.")
     else:
-        with st.spinner("Verificando acesso ao endpoint produtos..."):
-            try:
-                # Diagnostico direto: nao consulta cache e nao exibe dados da API.
-                sigyo_get_json(
-                    token,
-                    "produtos",
-                    params={"expand": "categoria"},
-                    base_url=SIGYO_API_URL,
-                )
-            except SigyoApiError as exc:
-                st.error(exc.user_message())
-                if exc.detail and "Bloqueio Cloudflare" in exc.detail:
-                    st.warning(
-                        "O token foi carregado, mas o Cloudflare recusou a "
-                        "requisicao antes de a API validar a credencial. "
-                        "Mover o token de um .env para os Secrets nao "
-                        "libera um IP bloqueado."
+        # O primeiro endpoint replica a consulta Python que funcionou localmente.
+        # Nao exibimos nem armazenamos os dados pessoais retornados.
+        verificacoes = (
+            (
+                "clientes",
+                {
+                    "expand": "municipio,municipio.estado,modulos,organizacao,tipo",
+                    "page": 1,
+                    "per-page": 100,
+                },
+            ),
+            ("produtos", {"expand": "categoria"}),
+        )
+        resultados = {}
+        with st.spinner("Comparando os endpoints clientes e produtos..."):
+            for endpoint_diagnostico, parametros_diagnostico in verificacoes:
+                try:
+                    # Chamada real, sem cache, com o mesmo token dos Secrets.
+                    sigyo_get_json(
+                        token,
+                        endpoint_diagnostico,
+                        params=parametros_diagnostico,
+                        base_url=SIGYO_API_URL,
                     )
-                if exc.detail:
-                    with st.expander("Diagnostico HTTP (sem credenciais)"):
-                        st.code(exc.detail, language=None)
-            else:
-                st.success(
-                    "Endpoint produtos respondeu com sucesso. "
-                    "A comunicacao com a API esta acessivel."
-                )
+                except SigyoApiError as exc:
+                    resultados[endpoint_diagnostico] = False
+                    st.error(f"{endpoint_diagnostico}: {exc.user_message()}")
+                    if exc.detail:
+                        with st.expander(f"Diagnostico HTTP - {endpoint_diagnostico}"):
+                            st.code(exc.detail, language=None)
+                else:
+                    resultados[endpoint_diagnostico] = True
+                    st.success(f"{endpoint_diagnostico}: consulta autorizada (HTTP 2xx).")
+
+        if resultados.get("clientes") and not resultados.get("produtos"):
+            st.warning(
+                "O endpoint clientes respondeu, mas produtos nao. "
+                "Investigue permissoes ou regras especificas do endpoint produtos."
+            )
+        elif not resultados.get("clientes") and not resultados.get("produtos"):
+            st.info(
+                "Os dois endpoints falharam na hospedagem. Se ambos mostrarem "
+                "Bloqueio Cloudflare, o sucesso do Python no Windows nao "
+                "comprova acesso a partir da rede do Streamlit Cloud."
+            )
+
 
 col1, col2, col3 = st.columns(3)
 hoje = datetime.now()

@@ -73,8 +73,12 @@ def _build_headers(
     configurados e estiverem na lista permitida.
     """
     headers = {
+        # Mesmos headers do teste.py que consultou /clientes com HTTP 200.
+        # Authorization e sempre definido por requisicao em get_json.
         "Accept": "application/json",
-        "User-Agent": requests.utils.default_user_agent(),
+        "Content-Type": "application/json",
+        "User-Agent": "SIGYO-API-Client/1.0",
+        "Cache-Control": "no-cache",
     }
     _apply_overrides(headers, overrides)
     return headers
@@ -97,13 +101,14 @@ def _session_for_thread() -> requests.Session:
     session = getattr(_thread, "session", None)
     if session is None:
         session = requests.Session()
+        # Politica equivalente a do teste.py local, sem retry para HTTP 403.
         retries = Retry(
-            total=2,
-            connect=2,
-            read=0,
-            status=2,
-            backoff_factor=0.5,
-            status_forcelist=(429, 502, 503, 504),
+            total=3,
+            connect=3,
+            read=2,
+            status=3,
+            backoff_factor=1,
+            status_forcelist=(429, 500, 502, 503, 504),
             allowed_methods=frozenset({"GET"}),
             respect_retry_after_header=True,
             raise_on_status=False,
