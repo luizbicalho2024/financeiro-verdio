@@ -11,6 +11,8 @@ from app_core.sugesp_api import (
     normalize_token,
 )
 
+from app_core.sugesp_credentials import resolve_configuration
+
 import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta
@@ -43,20 +45,11 @@ def formatar_moeda_br(valor):
     # Substitui vírgulas temporárias por X, pontos por vírgulas, e X por pontos
     return valor_formatado.replace(",", "X").replace(".", ",").replace("X", ".")
 
-def _secret(name, default=""):
-    try:
-        return st.secrets.get(name, default)
-    except Exception:
-        return default
-
-
-SIGYO_API_URL = str(
-    _secret(
-        "SIGYO_API_BASE_URL",
-        SIGYO_BASE_URL,
-    )
-    or SIGYO_BASE_URL
-).strip().rstrip("/")
+# Secrets do Streamlit tem prioridade; fallback via variavel de ambiente.
+# Nao exiba a credencial nem grave valores em logs.
+TOKEN_SIGYO_SECRET, ORIGEM_TOKEN_SIGYO, SIGYO_API_URL = resolve_configuration(
+    st.secrets, os.environ
+)
 
 
 @st.cache_data(
@@ -303,33 +296,53 @@ st.markdown("Gere relatórios detalhados para as secretarias vinculadas ao clien
 st.markdown("---")
 
 st.subheader("1. Configurações da Consulta")
-token_secret = str(
-    _secret(
-        "SIGYO_API_TOKEN",
-        "",
+# Se houver Secret, o usuario nao consegue substitui-lo por acidente
+# com um token antigo digitado na pagina.
+if TOKEN_SIGYO_SECRET:
+    token = TOKEN_SIGYO_SECRET
+    st.caption(f"Token SIGYO carregado de: {ORIGEM_TOKEN_SIGYO}.")
+else:
+    token_digitado = st.text_input(
+        "Token de Autenticacao da API SIGYO",
+        type="password",
+        help=(
+            "Utilize o token somente durante testes. "
+            "No Streamlit Cloud, configure SIGYO_API_TOKEN nos Secrets."
+        ),
     )
-    or ""
-).strip()
+    token = normalize_token(token_digitado)
+    st.caption("Nenhum token SIGYO encontrado nos Secrets ou no ambiente.")
 
-token_digitado = st.text_input(
-    "🔑 Token de Autenticação da API SIGYO",
-    type="password",
-    help=(
-        "Aceita o token puro ou no formato Bearer TOKEN. "
-        "Se ficar vazio, será utilizado SIGYO_API_TOKEN "
-        "dos Secrets do Streamlit."
-    ),
-)
-
-token = (
-    token_digitado.strip()
-    or token_secret
-)
-
-if token_secret and not token_digitado.strip():
-    st.caption(
-        "🔐 Token SIGYO carregado dos Secrets."
-    )
+if st.button("Testar conexao SIGYO", key="sugesp_testar_api"):
+    if not token:
+        st.error("Configure SIGYO_API_TOKEN nos Secrets do Streamlit.")
+    else:
+        with st.spinner("Verificando acesso ao endpoint produtos..."):
+            try:
+                # Diagnostico direto: nao consulta cache e nao exibe dados da API.
+                sigyo_get_json(
+                    token,
+                    "produtos",
+                    params={"expand": "categoria"},
+                    base_url=SIGYO_API_URL,
+                )
+            except SigyoApiError as exc:
+                st.error(exc.user_message())
+                if exc.detail and "Bloqueio Cloudflare" in exc.detail:
+                    st.warning(
+                        "O token foi carregado, mas o Cloudflare recusou a "
+                        "requisicao antes de a API validar a credencial. "
+                        "Mover o token de um .env para os Secrets nao "
+                        "libera um IP bloqueado."
+                    )
+                if exc.detail:
+                    with st.expander("Diagnostico HTTP (sem credenciais)"):
+                        st.code(exc.detail, language=None)
+            else:
+                st.success(
+                    "Endpoint produtos respondeu com sucesso. "
+                    "A comunicacao com a API esta acessivel."
+                )
 
 col1, col2, col3 = st.columns(3)
 hoje = datetime.now()
