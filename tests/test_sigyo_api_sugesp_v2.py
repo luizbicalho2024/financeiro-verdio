@@ -17,7 +17,7 @@ def fake_response(status=200, body="[]", data=None, headers=None):
 
 class SUGESPApiV2Tests(unittest.TestCase):
     @patch("app_core.sugesp_api._headers_from_streamlit", return_value={})
-    @patch("app_core.sugesp_api.requests.get")
+    @patch("app_core.sugesp_api._http_get")
     def test_headers_in_each_request_and_token_protected(self, mock_get, _):
         mock_get.return_value = fake_response()
         result = get_json(
@@ -42,7 +42,7 @@ class SUGESPApiV2Tests(unittest.TestCase):
         self.assertFalse(kwargs["allow_redirects"])
 
     @patch("app_core.sugesp_api._headers_from_streamlit", return_value={})
-    @patch("app_core.sugesp_api.requests.get")
+    @patch("app_core.sugesp_api._http_get")
     def test_403_cloudflare_exposes_only_safe_diagnostic(self, mock_get, _):
         response = fake_response(403, "<html>Attention Required! Sorry, you have been blocked.</html>", headers={"cf-ray": "ray-123"})
         response.json.side_effect = ValueError("not json")
@@ -55,7 +55,7 @@ class SUGESPApiV2Tests(unittest.TestCase):
         self.assertNotIn("token-valido", raised.exception.detail)
 
     @patch("app_core.sugesp_api._headers_from_streamlit", return_value={})
-    @patch("app_core.sugesp_api.requests.get")
+    @patch("app_core.sugesp_api._http_get")
     def test_403_from_api_keeps_permission_message(self, mock_get, _):
         mock_get.return_value = fake_response(403, '{"message":"Forbidden"}', {"message":"Forbidden"})
         with self.assertRaises(SigyoApiError) as raised:
@@ -64,7 +64,7 @@ class SUGESPApiV2Tests(unittest.TestCase):
         self.assertNotIn("Cloudflare", raised.exception.user_message())
 
     @patch("app_core.sugesp_api._headers_from_streamlit", return_value={})
-    @patch("app_core.sugesp_api.requests.get")
+    @patch("app_core.sugesp_api._http_get")
     def test_transacoes_date_filter_is_preserved(self, mock_get, _):
         mock_get.return_value = fake_response()
         get_json("token", "transacoes", params={"TransacaoSearch[data_cadastro]": "01/10/2026 - 07/10/2026"})
@@ -72,7 +72,7 @@ class SUGESPApiV2Tests(unittest.TestCase):
         self.assertEqual(kwargs["params"]["TransacaoSearch[data_cadastro]"], "01/10/2026 - 07/10/2026")
 
     @patch("app_core.sugesp_api._headers_from_streamlit", return_value={})
-    @patch("app_core.sugesp_api.requests.get")
+    @patch("app_core.sugesp_api._http_get")
     def test_empty_response_204(self, mock_get, _):
         mock_get.return_value = fake_response(204, "")
         self.assertEqual(get_json("token", "produtos"), [])

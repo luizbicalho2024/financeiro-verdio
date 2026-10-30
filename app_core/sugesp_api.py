@@ -1,17 +1,20 @@
-"""Cliente HTTP exclusivo do relatorio SUGESP.
+"""Cliente HTTP de leitura exclusivo do relatorio SUGESP / SIGYO.
 
-Mantem intacto app_core.sigyo_api, utilizado pelas outras paginas.
-Headers personalizados podem ser fornecidos por [SIGYO_SUGESP_HEADERS]
-nos Secrets do Streamlit. Nao armazena nem registra credenciais.
+Autenticacao carregada pelo modulo de credenciais existente; utiliza headers
+nativos de requests e permite apenas overrides seguros nos Secrets.
+Nunca tenta contornar desafios WAF e nao registra tokens.
 """
 from __future__ import annotations
 
 import re
+import threading
 from collections.abc import Mapping
 from typing import Any
 from urllib.parse import urlsplit
 
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 from app_core.sigyo_api import (
     SIGYO_BASE_URL,
@@ -26,9 +29,9 @@ class SigyoApiError(_BaseSigyoApiError):
         if self.status_code == 403 and self.detail and "Bloqueio Cloudflare" in self.detail:
             suffix = f" no endpoint '{self.endpoint}'" if self.endpoint else ""
             return (
-                f"Erro HTTP 403{suffix}: bloqueio na protecao Cloudflare "
-                "antes da API SIGYO. Confirme o IP de saida do Streamlit "
-                "e solicite ao administrador da API a revisao da regra WAF."
+                f"Erro HTTP 403{suffix}: o Cloudflare bloqueou a requisicao "
+                "antes da validacao do token pela API SIGYO. "
+                "Confira o Ray ID no diagnostico e a regra aplicada ao IP de saida."
             )
         return super().user_message()
 
@@ -44,67 +47,108 @@ _ALLOWED_HEADERS = {
     "pragma": "Pragma",
 }
 
+_thread = threading.local()
+
 
 def _headers_from_streamlit() -> dict[str, str]:
-    """Le configuracao opcional sem falhar quando executado fora do Streamlit."""
+    """Le headers opcionais dos Secrets sem expor credenciais ou falhar sem Streamlit."""
     try:
         import streamlit as st
         raw = st.secrets.get("SIGYO_SUGESP_HEADERS", {})
         if isinstance(raw, Mapping):
             return {str(key): str(value) for key, value in raw.items() if value is not None}
-    except Exception:
-        # Headers opcionais nunca podem derrubar a consulta principal.
+    except (ImportError, KeyError, OSError, FileNotFoundError):
         pass
     return {}
 
 
-def _build_headers(base_url: str, overrides: Mapping[str, Any] | None = None) -> dict[str, str]:
-    parsed = urlsplit(base_url)
-    origin = f"{parsed.scheme}://{parsed.netloc}"
+def _build_headers(
+    base_url: str,
+    overrides: Mapping[str, Any] | None = None,
+) -> dict[str, str]:
+    """Imita um cliente Python requests real, sem fingir ser um navegador.
+
+    GET nao envia Content-Type, Origin, Referer ou X-Requested-With sem
+    necessidade. Headers adicionais so entram se forem explicitamente
+    configurados e estiverem na lista permitida.
+    """
     headers = {
-        "Authorization": "",  # Preenchido exclusivamente por get_json.
-        "Accept": "application/json, text/plain, */*",
-        "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
-        "Content-Type": "application/json",
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/131.0.0.0 Safari/537.36"
-        ),
-        "Referer": f"{origin}/",
-        "X-Requested-With": "XMLHttpRequest",
+        "Accept": "application/json",
+        "User-Agent": requests.utils.default_user_agent(),
     }
-    for name, value in (overrides or {}).items():
-        canonical = _ALLOWED_HEADERS.get(str(name).strip().lower())
-        if canonical is None:
-            continue  # Nao permite sobrescrever Authorization, Host ou Cookie.
-        value = str(value).strip()
-        if value and "\r" not in value and "\n" not in value:
-            headers[canonical] = value
+    _apply_overrides(headers, overrides)
     return headers
 
 
+def _apply_overrides(
+    headers: dict[str, str], overrides: Mapping[str, Any] | None
+) -> None:
+    for name, value in (overrides or {}).items():
+        canonical = _ALLOWED_HEADERS.get(str(name).strip().lower())
+        if canonical is None:
+            continue  # Protege Authorization, Cookie, Host e cabecalhos sensiveis.
+        sanitized = str(value).strip()
+        if sanitized and "\r" not in sanitized and "\n" not in sanitized:
+            headers[canonical] = sanitized
+
+
+def _session_for_thread() -> requests.Session:
+    """Pool HTTPS reutilizavel por thread, sem armazenar o token na sessao."""
+    session = getattr(_thread, "session", None)
+    if session is None:
+        session = requests.Session()
+        retries = Retry(
+            total=2,
+            connect=2,
+            read=0,
+            status=2,
+            backoff_factor=0.5,
+            status_forcelist=(429, 502, 503, 504),
+            allowed_methods=frozenset({"GET"}),
+            respect_retry_after_header=True,
+            raise_on_status=False,
+        )
+        session.mount(
+            "https://",
+            HTTPAdapter(pool_connections=5, pool_maxsize=10, max_retries=retries),
+        )
+        _thread.session = session
+    return session
+
+
+def _http_get(url: str, **kwargs: Any) -> requests.Response:
+    return _session_for_thread().get(url, **kwargs)
+
+
 def _safe_error_detail(response: requests.Response, token: str) -> str:
-    """Diagnosticavel, sem exibir HTML do WAF nem o token."""
+    """Retorna somente diagnostico seguro: sem HTML WAF nem token."""
     body = (response.text or "")[:8000]
     lower = body.lower()
-    is_cloudflare = response.status_code == 403 and (
+    cloudflare = response.status_code == 403 and (
         "sorry, you have been blocked" in lower
         or "attention required!" in lower
         or ("cloudflare" in lower and "<html" in lower)
     )
-    ray = re.sub(r"[^a-zA-Z0-9.\-]", "", response.headers.get("cf-ray", ""))[:100]
-    if is_cloudflare:
-        return "Bloqueio Cloudflare antes da API SIGYO" + (f" | Ray ID: {ray}" if ray else "")
+    ray = re.sub(
+        r"[^a-zA-Z0-9.\-]", "", response.headers.get("cf-ray", "")
+    )[:100]
+    if cloudflare:
+        return "Bloqueio Cloudflare antes da API SIGYO" + (
+            f" | Ray ID: {ray}" if ray else ""
+        )
 
     detail = response.reason or "Requisicao recusada"
     try:
         payload = response.json()
         if isinstance(payload, Mapping):
-            parts = [str(payload[key]) for key in ("message", "error", "detail", "title") if payload.get(key)]
+            parts = [
+                str(payload[key])
+                for key in ("message", "error", "detail", "title")
+                if payload.get(key)
+            ]
             if parts:
                 detail = " | ".join(parts)
-    except ValueError:
+    except (ValueError, TypeError):
         pass
     detail = re.sub(r"<[^>]+>", " ", detail)
     detail = re.sub(r"\s+", " ", detail).strip()[:450]
@@ -127,27 +171,31 @@ def get_json(
 
     endpoint = str(endpoint).strip().lstrip("/")
     base_url = str(base_url).strip().rstrip("/")
-    if not endpoint or not base_url.startswith("https://"):
+    parsed = urlsplit(base_url)
+    if (
+        parsed.scheme != "https"
+        or not parsed.netloc
+        or parsed.username
+        or parsed.password
+        or parsed.query
+        or parsed.fragment
+        or not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9/_-]*", endpoint)
+    ):
         raise SigyoApiError("Endpoint ou URL HTTPS da API invalidos.", endpoint=endpoint)
 
     headers = _build_headers(base_url, _headers_from_streamlit())
     if request_headers:
-        # Configuracao explicita substitui headers opcionais sem afetar Authorization.
-        for name, value in request_headers.items():
-            canonical = _ALLOWED_HEADERS.get(str(name).strip().lower())
-            if canonical is not None:
-                value = str(value).strip()
-                if value and "\r" not in value and "\n" not in value:
-                    headers[canonical] = value
+        _apply_overrides(headers, request_headers)
     headers["Authorization"] = f"Bearer {token}"
 
     try:
-        response = requests.get(
+        response = _http_get(
             f"{base_url}/{endpoint}",
             headers=headers,
             params=dict(params or {}),
             timeout=SIGYO_TIMEOUT,
             allow_redirects=False,
+            verify=True,
         )
     except requests.Timeout as exc:
         raise SigyoApiError("Tempo limite excedido.", endpoint=endpoint) from exc
